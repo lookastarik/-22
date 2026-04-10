@@ -1,0 +1,194 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&family=Space+Grotesk:wght@300;400;500;600;700&family=Cinzel:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Alliance No.1", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-display: "Alliance No.1", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen, Ubuntu, Cantarell, "Fira Sans", "Droid Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-legend: "Cinzel", serif;
+
+  --color-primary: var(--primary-accent);
+  --color-secondary: var(--secondary-accent);
+  --color-surface: var(--bg-surface);
+  --color-base: var(--bg-base);
+  --color-border: var(--border-color);
+  --color-text-main: var(--text-main);
+  --color-text-muted: var(--text-muted);
+
+  --color-tactical-indigo: #ffffff;
+  --color-military-emerald: #ffffff;
+}
+
+:root {
+  /* Tactical (Default) - Monochrome */
+  --primary-accent: #ffffff;
+  --secondary-accent: #a1a1aa;
+  --bg-base: #000000;
+  --bg-surface: rgba(20, 20, 20, 0.8);
+  --border-color: rgba(255, 255, 255, 0.2);
+  --text-main: #ffffff;
+  --text-muted: #a1a1aa;
+}
+
+[data-theme='cyber'] {
+  --primary-accent: #ff00ff;
+  --secondary-accent: #00ffff;
+  --bg-base: #050505;
+  --bg-surface: rgba(20, 0, 20, 0.6);
+  --border-color: rgba(255, 0, 255, 0.2);
+  --text-main: #ffffff;
+  --text-muted: #ff00ff;
+}
+
+[data-theme='royal'] {
+  --primary-accent: #fbbf24;
+  --secondary-accent: #8b5cf6;
+  --bg-base: #1e1b4b;
+  --bg-surface: rgba(30, 27, 75, 0.6);
+  --border-color: rgba(251, 191, 36, 0.2);
+  --text-main: #fef3c7;
+  --text-muted: #d97706;
+}
+
+[data-theme='arctic'] {
+  --primary-accent: #38bdf8;
+  --secondary-accent: #64748b;
+  --bg-base: #f1f5f9;
+  --bg-surface: rgba(255, 255, 255, 0.4);
+  --border-color: rgba(56, 189, 248, 0.2);
+  --text-main: #0f172a;
+  --text-muted: #475569;
+}
+
+[data-theme='desert'] {
+  --primary-accent: #f59e0b;
+  --secondary-accent: #b45309;
+  --bg-base: #451a03;
+  --bg-surface: rgba(69, 26, 3, 0.6);
+  --border-color: rgba(245, 158, 11, 0.2);
+  --text-main: #fffbeb;
+  --text-muted: #d97706;
+}
+
+[data-mode='light'] {
+  --bg-base: #ffffff;
+  --bg-surface: rgba(255, 255, 255, 0.5);
+  --border-color: rgba(0, 0, 0, 0.1);
+  --text-main: #18181b;
+  --text-muted: #71717a;
+}
+
+@layer base {
+  body {
+    @apply bg-base text-[var(--text-main)] font-sans antialiased transition-colors duration-500;
+    background-image: 
+      radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.05) 0%, transparent 100%),
+      linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.01), rgba(255, 255, 255, 0.01), rgba(255, 255, 255, 0.01));
+    background-size: 100% 100%, 100% 4px, 3px 100%;
+    pointer-events: auto;
+    position: relative;
+  }
+
+  .tactical-grid {
+    @apply absolute inset-0 pointer-events-none;
+    background-image: 
+      url("data:image/svg+xml,%3Csvg width='80' height='80' viewBox='0 0 80 80' xmlns='http://www.w3.org/2000/svg'%3E%3Cdefs%3E%3Cfilter id='glow'%3E%3CfeGaussianBlur stdDeviation='2' result='coloredBlur'/%3E%3CfeMerge%3E%3CfeMergeNode in='coloredBlur'/%3E%3CfeMergeNode in='SourceGraphic'/%3E%3C/feMerge%3E%3C/filter%3E%3C/defs%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cpath d='M0 40h80M40 0v80' stroke='rgba(255,255,255,0.35)' stroke-width='1'/%3E%3Cpath d='M36 40h8M40 36v8' stroke='rgba(255,255,255,1)' stroke-width='2' filter='url(%23glow)'/%3E%3Cpath d='M0 0l80 80M80 0L0 80' stroke='rgba(255,255,255,0.15)' stroke-width='1' stroke-dasharray='4 4'/%3E%3C/g%3E%3C/svg%3E");
+    background-size: 80px 80px;
+    background-position: center;
+    background-repeat: repeat;
+    animation: grid-flicker 8s infinite;
+    z-index: 50;
+  }
+
+  @keyframes grid-flicker {
+    0%, 100% { opacity: 0.8; }
+    33% { opacity: 0.9; }
+    34% { opacity: 0.3; }
+    35% { opacity: 0.9; }
+    66% { opacity: 0.8; }
+    67% { opacity: 1; }
+    68% { opacity: 0.2; }
+    69% { opacity: 0.9; }
+  }
+
+  body::after {
+    content: "";
+    position: fixed;
+    inset: 0;
+    background: radial-gradient(circle at center, transparent 0%, rgba(0, 0, 0, 0.4) 100%);
+    pointer-events: none;
+    z-index: -1;
+  }
+
+  h1, h2, h3, h4 {
+    @apply font-display tracking-tight;
+  }
+}
+
+@layer components {
+  .apple-glass {
+    @apply bg-surface backdrop-blur-2xl border border-border shadow-2xl transition-all duration-300;
+    box-shadow: 0 4px 24px 0 rgba(0, 0, 0, 0.3);
+  }
+
+  [data-mode='light'] .apple-glass {
+    box-shadow: 0 4px 24px 0 rgba(31, 38, 135, 0.05);
+  }
+
+  .glass-hover {
+    @apply hover:bg-white/10 hover:backdrop-blur-md transition-all duration-200;
+  }
+
+  [data-mode='light'] .glass-hover {
+    @apply hover:bg-black/5 hover:backdrop-blur-md;
+  }
+
+  .energy-border {
+    @apply relative overflow-hidden;
+  }
+
+  .energy-border::after {
+    content: '';
+    @apply absolute inset-0 border border-primary/20 rounded-[inherit] pointer-events-none transition-all duration-300;
+  }
+
+  .energy-border:hover::after {
+    @apply border-primary/50 shadow-[0_0_15px_rgba(var(--primary-accent),0.3)];
+  }
+
+  .homm-heading {
+    @apply font-mono uppercase tracking-[0.3em] text-primary drop-shadow-[0_0_10px_rgba(var(--primary-accent),0.5)];
+  }
+
+  .tactical-border {
+    @apply border border-white/10 relative;
+  }
+
+  .tactical-border::before {
+    content: "";
+    @apply absolute -top-1 -left-1 w-2 h-2 border-t-2 border-l-2 border-primary;
+  }
+
+  .tactical-border::after {
+    content: "";
+    @apply absolute -bottom-1 -right-1 w-2 h-2 border-b-2 border-r-2 border-primary;
+  }
+
+  .scanline-anim {
+    @apply absolute inset-0 pointer-events-none overflow-hidden z-50;
+  }
+
+  .scanline-anim::after {
+    content: "";
+    @apply absolute inset-0 bg-gradient-to-b from-transparent via-[#ffffff]/30 to-transparent;
+    height: 250px;
+    animation: scanline 10s linear infinite;
+    filter: blur(25px);
+  }
+
+  @keyframes scanline {
+    from { transform: translateY(-200px); }
+    to { transform: translateY(100vh); }
+  }
+}
