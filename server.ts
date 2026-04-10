@@ -270,6 +270,26 @@ async function startServer() {
     }
   });
 
+  app.post("/api/v1/ai/analyze", async (req, res) => {
+    const { building_id } = req.body;
+    try {
+      const building = await db.get("SELECT * FROM buildings WHERE id = ?", [building_id]);
+      if (building) {
+        res.json({
+          id: building.id,
+          market_value: building.cost,
+          monthly_yield: building.yield,
+          roi: building.roi,
+          status: building.status === 1 ? 'Stable' : building.status === 2 ? 'Risk' : 'Anomalous'
+        });
+      } else {
+        res.status(404).json({ error: "Building not found" });
+      }
+    } catch (error) {
+      res.status(500).json({ error: "Database error" });
+    }
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

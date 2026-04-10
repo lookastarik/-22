@@ -40,7 +40,6 @@ import {
   Settings,
   LogOut,
   Search,
-  Globe,
   Palette,
   Sun,
   Moon,
@@ -53,12 +52,6 @@ import {
   Filter,
   ChevronDown,
   ChevronUp,
-  Cloud,
-  CloudRain,
-  Wind,
-  Thermometer,
-  CloudLightning,
-  SunMedium,
   Lock,
   Upload,
   Activity,
@@ -91,14 +84,6 @@ interface MediaItem {
   type: 'photo' | 'video';
   url: string;
   timestamp: number;
-}
-
-interface WeatherData {
-  temp: number;
-  condition: string;
-  windSpeed: number;
-  humidity: number;
-  locationName: string;
 }
 
 interface ChatMessage {
@@ -393,6 +378,111 @@ function DeckGLOverlay(props: MapboxOverlayProps) {
   return null;
 }
 
+const TacticalHUD = () => {
+  return (
+    <div className="fixed inset-0 pointer-events-none z-[55] flex items-center justify-center overflow-hidden">
+      <div className="relative w-full h-full flex items-center justify-center">
+        {/* Main Data Top */}
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="absolute top-[12%] flex flex-col items-center gap-1"
+        >
+          <div className="w-16 h-px bg-primary/20" />
+          <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">Main Data</span>
+          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">00</span>
+          <div className="flex gap-6 mt-2 opacity-30">
+            <span className="text-[6px] font-mono text-primary tracking-widest">826 0363 775 P512</span>
+            <span className="text-[6px] font-mono text-primary tracking-widest">A0. 88. 4. 95</span>
+          </div>
+        </motion.div>
+
+        {/* Main Data Bottom */}
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="absolute bottom-[12%] flex flex-col items-center gap-1"
+        >
+          <div className="flex gap-6 mb-2 opacity-30">
+            <span className="text-[6px] font-mono text-primary tracking-widest">826 0363 775 P512</span>
+            <span className="text-[6px] font-mono text-primary tracking-widest">A0. 88. 4. 95</span>
+          </div>
+          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">00</span>
+          <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">Main Data</span>
+          <div className="w-16 h-px bg-primary/20" />
+        </motion.div>
+
+        {/* Center Reticle */}
+        <motion.div 
+          initial={{ opacity: 0, scale: 0.8 }}
+          animate={{ opacity: 0.4, scale: 1 }}
+          className="relative w-96 h-96 flex items-center justify-center"
+        >
+           <svg width="100%" height="100%" viewBox="0 0 200 200" className="absolute">
+             <circle cx="100" cy="100" r="45" stroke="white" strokeWidth="0.5" fill="none" strokeDasharray="1 3" className="opacity-50" />
+             <circle cx="100" cy="100" r="35" stroke="white" strokeWidth="1" fill="none" className="opacity-80" />
+             <circle cx="100" cy="100" r="1.5" fill="white" />
+             
+             {/* Cross lines */}
+             <line x1="100" y1="80" x2="100" y2="92" stroke="white" strokeWidth="1" />
+             <line x1="100" y1="108" x2="100" y2="120" stroke="white" strokeWidth="1" />
+             <line x1="80" y1="100" x2="92" y2="100" stroke="white" strokeWidth="1" />
+             <line x1="108" y1="100" x2="120" y2="100" stroke="white" strokeWidth="1" />
+
+             {/* Inner brackets */}
+             <path d="M85 85 L90 85 L90 90" stroke="white" strokeWidth="0.5" fill="none" />
+             <path d="M115 85 L110 85 L110 90" stroke="white" strokeWidth="0.5" fill="none" />
+             <path d="M85 115 L90 115 L90 110" stroke="white" strokeWidth="0.5" fill="none" />
+             <path d="M115 115 L110 115 L110 110" stroke="white" strokeWidth="0.5" fill="none" />
+           </svg>
+        </motion.div>
+
+        {/* Side Brackets */}
+        <div className="absolute left-[20%] sm:left-[28%] h-64 w-24 flex flex-col justify-between py-8 opacity-20">
+           {[...Array(12)].map((_, i) => (
+             <div key={i} className="flex items-center gap-2">
+               <div className={cn("h-px bg-primary", i % 4 === 0 ? "w-4" : "w-2")} />
+               {i % 4 === 0 && <span className="text-[6px] font-mono text-primary">{(100 - i * 8).toString().padStart(3, '0')}</span>}
+             </div>
+           ))}
+        </div>
+        <div className="absolute right-[20%] sm:right-[28%] h-64 w-24 flex flex-col justify-between py-8 items-end opacity-20">
+           {[...Array(12)].map((_, i) => (
+             <div key={i} className="flex items-center gap-2">
+               {i % 4 === 0 && <span className="text-[6px] font-mono text-primary">{(100 - i * 8).toString().padStart(3, '0')}</span>}
+               <div className={cn("h-px bg-primary", i % 4 === 0 ? "w-4" : "w-2")} />
+             </div>
+           ))}
+        </div>
+
+        {/* Corner Markers */}
+        <div className="absolute top-[25%] left-[25%] flex flex-col gap-1 opacity-20">
+          <span className="text-[8px] font-mono text-primary tracking-widest">A06.8024</span>
+          <div className="w-4 h-4 border-t border-l border-primary" />
+        </div>
+        <div className="absolute top-[25%] right-[25%] flex flex-col items-end gap-1 opacity-20">
+          <span className="text-[8px] font-mono text-primary tracking-widest">A06.8024</span>
+          <div className="w-4 h-4 border-t border-r border-primary" />
+        </div>
+        <div className="absolute bottom-[25%] left-[25%] flex flex-col gap-1 opacity-20">
+          <div className="w-4 h-4 border-b border-l border-primary" />
+          <span className="text-[8px] font-mono text-primary tracking-widest">A06.8024</span>
+        </div>
+        <div className="absolute bottom-[25%] right-[25%] flex flex-col items-end gap-1 opacity-20">
+          <div className="w-4 h-4 border-b border-r border-primary" />
+          <span className="text-[8px] font-mono text-primary tracking-widest">A06.8024</span>
+        </div>
+
+        {/* Scanning Lines */}
+        <div className="absolute inset-0 flex flex-col justify-between py-12 px-24 opacity-5 pointer-events-none">
+          <div className="h-px w-full bg-gradient-to-r from-transparent via-primary to-transparent" />
+          <div className="h-px w-full bg-gradient-to-r from-transparent via-primary to-transparent" />
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
   const mapRef = React.useRef<MapRef>(null);
   const videoRef = React.useRef<HTMLVideoElement>(null);
@@ -420,7 +510,6 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [basemap, setBasemap] = useState('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
   const [showBuildings, setShowBuildings] = useState(true);
-  const [showWeather, setShowWeather] = useState(true);
   const [layersMenuOpen, setLayersMenuOpen] = useState(false);
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -433,6 +522,7 @@ export default function App() {
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
   const [showLogo, setShowLogo] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearching, setIsSearching] = useState(false);
   const [pulse, setPulse] = useState(0);
   // Firebase Auth Listener
   useEffect(() => {
@@ -587,9 +677,6 @@ export default function App() {
     };
   }, [buildingsData, filters]);
 
-  const [weather, setWeather] = useState<WeatherData | null>(null);
-  const [weatherLoading, setWeatherLoading] = useState(false);
-
   const t = translations[language];
 
   // Pulse timer for tactical animations
@@ -646,21 +733,32 @@ export default function App() {
     return () => clearInterval(timer);
   }, [portfolio, totalYield, balance, user]);
 
-  const handleSearch = useCallback(() => {
+  const handleSearch = useCallback(async () => {
     if (!searchQuery.trim()) return;
     
-    // Mock geocoding: fly to a random offset from center for demo
-    // In a real app, use a geocoding API
-    const lat = 55.7558 + (Math.random() - 0.5) * 0.02;
-    const lon = 37.6173 + (Math.random() - 0.5) * 0.02;
-    
-    mapRef.current?.flyTo({
-      center: [lon, lat],
-      zoom: 16,
-      duration: 3000,
-      essential: true
-    });
-    setSearchQuery('');
+    setIsSearching(true);
+    try {
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`);
+      const data = await response.json();
+      
+      if (data && data.length > 0) {
+        const { lat, lon } = data[0];
+        mapRef.current?.flyTo({
+          center: [parseFloat(lon), parseFloat(lat)],
+          zoom: 16,
+          duration: 3000,
+          essential: true
+        });
+        setSearchQuery('');
+      } else {
+        // Show some feedback if no results found
+        console.warn("No search results found for:", searchQuery);
+      }
+    } catch (error) {
+      console.error("Search failed:", error);
+    } finally {
+      setIsSearching(false);
+    }
   }, [searchQuery]);
 
   const basemaps = [
@@ -841,54 +939,6 @@ export default function App() {
     reader.readAsDataURL(file);
   };
 
-  const fetchWeather = useCallback(async (lat: number, lon: number) => {
-    setWeatherLoading(true);
-    try {
-      // Using Open-Meteo (No API key required)
-      const response = await fetch(
-        `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,weather_code,wind_speed_10m`
-      );
-      const data = await response.json();
-      
-      const weatherCodes: Record<number, string> = {
-        0: 'Clear sky',
-        1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast',
-        45: 'Fog', 48: 'Depositing rime fog',
-        51: 'Light drizzle', 53: 'Moderate drizzle', 55: 'Dense drizzle',
-        61: 'Slight rain', 63: 'Moderate rain', 65: 'Heavy rain',
-        71: 'Slight snow', 73: 'Moderate snow', 75: 'Heavy snow',
-        80: 'Slight rain showers', 81: 'Moderate rain showers', 82: 'Violent rain showers',
-        95: 'Thunderstorm', 96: 'Thunderstorm with slight hail', 99: 'Thunderstorm with heavy hail'
-      };
-
-      setWeather({
-        temp: data.current.temperature_2m,
-        condition: weatherCodes[data.current.weather_code] || 'Unknown',
-        windSpeed: data.current.wind_speed_10m,
-        humidity: data.current.relative_humidity_2m,
-        locationName: 'Current Sector'
-      });
-    } catch (err) {
-      console.error("Failed to fetch weather:", err);
-    } finally {
-      setWeatherLoading(false);
-    }
-  }, []);
-
-  // Initial weather fetch
-  useEffect(() => {
-    fetchWeather(viewState.latitude, viewState.longitude);
-  }, []);
-
-  // Fetch weather when map moves significantly (debounced)
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      fetchWeather(viewState.latitude, viewState.longitude);
-    }, 2000);
-    setMapCoords({ lat: viewState.latitude, lon: viewState.longitude });
-    return () => clearTimeout(timer);
-  }, [viewState.latitude, viewState.longitude, fetchWeather]);
-
   const averageROI = useMemo(() => {
     if (portfolioValue === 0) return 0;
     return (totalYield * 12 / portfolioValue) * 100;
@@ -908,6 +958,18 @@ export default function App() {
         status: { type: Type.STRING, description: "Building status (active, risk, sold)" }
       },
       required: ["center_lat", "center_lon", "radius_m"]
+    }
+  };
+
+  const analyzeBuildingTool = {
+    name: "analyze_building",
+    parameters: {
+      type: Type.OBJECT,
+      description: "Analyze a specific building's investment potential by querying its market value, monthly yield, and ROI.",
+      properties: {
+        building_id: { type: Type.NUMBER, description: "The unique ID of the building to analyze." }
+      },
+      required: ["building_id"]
     }
   };
 
@@ -931,32 +993,42 @@ export default function App() {
           { role: 'user', parts: [{ text: currentInput }] }
         ],
         config: {
-          systemInstruction: "You are a real estate analyst for YardSoft. Use the search_buildings tool to find properties. Always provide a concise summary of your findings.",
-          tools: [{ functionDeclarations: [searchBuildingsTool] }]
+          systemInstruction: "You are a real estate analyst for YardSoft. Use the search_buildings tool to find properties and analyze_building to get detailed investment metrics for a specific building. Always provide a concise investment recommendation based on the data.",
+          tools: [{ functionDeclarations: [searchBuildingsTool, analyzeBuildingTool] }]
         }
       });
 
       const functionCalls = response.functionCalls;
       if (functionCalls) {
         for (const call of functionCalls) {
+          let toolData;
           if (call.name === 'search_buildings') {
             const res = await fetch('/api/v1/ai/search', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(call.args)
             });
-            const data = await res.json();
-            
+            toolData = await res.json();
+          } else if (call.name === 'analyze_building') {
+            const res = await fetch('/api/v1/ai/analyze', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(call.args)
+            });
+            toolData = await res.json();
+          }
+
+          if (toolData) {
             const finalResponse = await ai.models.generateContent({
               model: "gemini-3-flash-preview",
               contents: [
                 { role: 'user', parts: [{ text: currentInput }] },
-                { role: 'model', parts: [{ text: "Searching for buildings..." }] },
-                { role: 'user', parts: [{ text: `Tool result: ${JSON.stringify(data)}` }] }
+                { role: 'model', parts: [{ text: `Executing ${call.name}...` }] },
+                { role: 'user', parts: [{ text: `Tool result: ${JSON.stringify(toolData)}` }] }
               ]
             });
             
-            setMessages(prev => [...prev, { role: 'assistant', content: finalResponse.text || "I found some results for you." }]);
+            setMessages(prev => [...prev, { role: 'assistant', content: finalResponse.text || "I've analyzed the data for you." }]);
           }
         }
       } else {
@@ -974,17 +1046,13 @@ export default function App() {
     <AppErrorBoundary>
       <div className="relative w-full h-screen bg-base overflow-hidden font-sans text-slate-200">
       
-      {/* Commander Mode Header */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
-        <div className="apple-glass px-6 py-1.5 rounded-lg border border-primary/30 flex items-center gap-4 shadow-[0_0_20px_rgba(var(--primary-accent),0.2)]">
-          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-          <h2 className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase">Commander Mode // Active</h2>
-          <div className="w-2 h-2 rounded-full bg-primary animate-pulse" />
-        </div>
-      </div>
+      {/* Cinematic Overlays */}
+      <div className="cinematic-overlay" />
+      <div className="cinematic-vignette" />
+      <TacticalHUD />
 
       {/* Tactical Alert Banner */}
-      <div className="absolute top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
+      <div className="absolute top-16 md:top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: [0, 1, 1, 0], y: [ -20, 0, 0, -20] }}
@@ -1046,30 +1114,13 @@ export default function App() {
       </AnimatePresence>
 
       {/* Top Navigation */}
-      <div className="absolute top-4 right-4 z-40 flex items-center gap-2 sm:gap-3">
-        <div className="hidden lg:flex items-center gap-4 mr-4 px-4 py-1.5 apple-glass rounded-xl border border-white/5">
-          <div className="flex flex-col items-end">
-            <span className="text-[7px] text-slate-500 uppercase font-bold tracking-[0.3em]">{t.coordinates}</span>
-            <span className="text-[10px] font-mono text-primary">
-              {mapCoords.lat.toFixed(4)}°N / {mapCoords.lon.toFixed(4)}°E
-            </span>
-          </div>
-          <div className="w-px h-6 bg-white/10" />
-          <div className="flex items-center gap-2">
-            <div className="relative">
-              <Radio className="w-3 h-3 text-secondary animate-pulse" />
-              <div className="absolute inset-0 bg-secondary/20 rounded-full animate-ping" />
-            </div>
-            <span className="text-[8px] font-mono text-secondary uppercase tracking-widest">{t.satelliteUplink}</span>
-          </div>
-        </div>
-
+      <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
         <button 
           onClick={() => setBriefingOpen(true)}
-          className="apple-glass px-3 sm:px-4 py-2 rounded-xl flex items-center gap-2 border border-secondary/30 text-secondary hover:bg-secondary/10 transition-all shadow-[0_0_15px_rgba(var(--secondary-accent),0.2)] pointer-events-auto"
+          className="apple-glass p-2 sm:px-4 sm:py-2 rounded-xl flex items-center gap-2 border border-secondary/30 text-secondary hover:bg-secondary/10 transition-all shadow-[0_0_15px_rgba(var(--secondary-accent),0.2)] pointer-events-auto"
         >
           <Info className="w-4 h-4" />
-          <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">{t.strategicBriefing}</span>
+          <span className="text-[10px] font-bold uppercase tracking-widest hidden lg:inline">{t.strategicBriefing}</span>
         </button>
         {!user ? (
           <button 
@@ -1161,7 +1212,14 @@ export default function App() {
       <div className="absolute top-20 sm:top-4 left-1/2 -translate-x-1/2 z-40 w-full max-w-lg px-4 pointer-events-none">
         <div className="flex flex-col gap-2 pointer-events-auto">
           <div className="apple-glass rounded-xl flex items-center px-4 py-2 group focus-within:ring-1 ring-primary/30 transition-all">
-            <Search className="w-4 h-4 text-slate-500 group-focus-within:text-primary transition-colors" />
+            <div className="relative flex items-center justify-center">
+              <Search className={cn("w-4 h-4 text-slate-500 group-focus-within:text-primary transition-colors", isSearching && "opacity-0")} />
+              {isSearching && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <div className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                </div>
+              )}
+            </div>
             <input 
               type="text"
               value={searchQuery}
@@ -1171,6 +1229,15 @@ export default function App() {
               className="flex-1 bg-transparent border-none outline-none px-3 text-xs font-display tracking-widest text-slate-200 placeholder:text-slate-600"
             />
             <div className="flex items-center gap-2">
+              {searchQuery.trim() && (
+                <button 
+                  onClick={handleSearch}
+                  className="p-1 hover:bg-white/5 rounded-lg text-primary transition-colors"
+                  title="Execute Search"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                </button>
+              )}
               <button 
                 onClick={() => setFiltersOpen(!filtersOpen)}
                 className={cn(
@@ -1462,7 +1529,7 @@ export default function App() {
               )}
             </AnimatePresence>
 
-            <div className="apple-glass rounded-full px-4 py-2 flex items-center gap-3">
+            <div className="hidden sm:flex apple-glass rounded-full px-4 py-2 items-center gap-3">
               <Wallet className="w-3.5 h-3.5 text-secondary" />
               <div className="flex flex-col">
                 <span className="text-[8px] text-slate-500 uppercase font-bold leading-none tracking-widest">{t.treasury}</span>
@@ -1472,7 +1539,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="relative pointer-events-auto">
+            <div className="relative pointer-events-auto hidden sm:block">
               <button 
                 onClick={() => setRoleMenuOpen(!roleMenuOpen)}
                 className="apple-glass rounded-full px-4 py-2 flex items-center gap-3 glass-hover transition-all"
@@ -1663,20 +1730,6 @@ export default function App() {
                       </button>
 
                       <button
-                        onClick={() => setShowWeather(!showWeather)}
-                        className={cn(
-                          "flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
-                          showWeather ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
-                        )}
-                      >
-                        <div className="flex items-center gap-3">
-                          <Cloud className="w-3.5 h-3.5" />
-                          {t.weather}
-                        </div>
-                        {showWeather ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                      </button>
-
-                      <button
                         disabled
                         className="flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider text-slate-600 cursor-not-allowed"
                       >
@@ -1695,7 +1748,10 @@ export default function App() {
 
           {/* Legend Toggle */}
           <button 
-            onClick={() => setLegendOpen(!legendOpen)}
+            onClick={() => {
+              setLegendOpen(!legendOpen);
+              if (!legendOpen && window.innerWidth < 640) setChatOpen(false);
+            }}
             className={cn(
               "apple-glass rounded-lg p-2 flex items-center justify-center transition-all border shadow-lg",
               legendOpen ? "bg-primary/20 border-primary/40 text-primary" : "border-white/5 text-slate-400 glass-hover"
@@ -1705,146 +1761,48 @@ export default function App() {
             <Info className="w-4 h-4" />
           </button>
 
-          {/* Investment Summary Widget */}
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="hidden md:block w-64 tactical-glass energy-border rounded-xl shadow-2xl overflow-hidden"
-          >
-            <div className="p-3 border-b border-slate-800 bg-tactical-indigo/10 flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <TrendingUp className="w-3.5 h-3.5 text-tactical-indigo" />
-                <h3 className="text-[9px] font-display font-bold uppercase tracking-[0.2em] text-indigo-100">Strategic Assets</h3>
-              </div>
-              <span className="text-[9px] font-mono bg-tactical-indigo/20 text-tactical-indigo px-1.5 py-0.5 rounded-full border border-tactical-indigo/30">
-                {portfolio.length} UNITS
-              </span>
-            </div>
-            
-            <div className="p-4 space-y-4">
-              <div className="space-y-1.5">
-                <div className="flex justify-between items-end">
-                  <span className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">Valuation</span>
-                  <span className="text-xs font-mono text-magical-gold font-bold">${portfolioValue.toLocaleString()}</span>
-                </div>
-                <div className="h-1 w-full bg-slate-900 rounded-full overflow-hidden border border-slate-800">
-                  <motion.div 
-                    initial={{ width: 0 }}
-                    animate={{ width: '100%' }}
-                    className="h-full bg-tactical-indigo shadow-[0_0_10px_rgba(99,102,241,0.5)]"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-0.5">
-                  <span className="text-[8px] text-slate-500 uppercase font-bold block tracking-widest">Yield</span>
-                  <div className="flex items-center gap-1">
-                    <Coins className="w-3 h-3 text-white" />
-                    <span className="text-xs font-mono font-bold text-white">${totalYield.toLocaleString()}</span>
-                  </div>
-                </div>
-                <div className="space-y-0.5">
-                  <span className="text-[8px] text-slate-500 uppercase font-bold block tracking-widest">ROI</span>
-                  <div className="flex items-center gap-1">
-                    <TrendingUp className="w-3 h-3 text-tactical-indigo" />
-                    <span className="text-xs font-mono font-bold text-tactical-indigo">{averageROI.toFixed(1)}%</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-
-          {/* Weather Overlay Widget */}
-          <AnimatePresence>
-            {showWeather && (
-              <motion.div 
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: 20 }}
-                transition={{ delay: 0.2 }}
-                className="hidden md:block w-64 tactical-glass energy-border rounded-xl shadow-2xl overflow-hidden"
-              >
-                <div className="p-3 border-b border-slate-800 bg-primary/10 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Globe className="w-3.5 h-3.5 text-primary" />
-                    <h3 className="text-[9px] font-display font-bold uppercase tracking-[0.2em] text-slate-100">{t.weather}</h3>
-                  </div>
-                  {weatherLoading && <div className="w-1.5 h-1.5 bg-primary rounded-full animate-pulse" />}
-                </div>
-                
-                <div className="p-4">
-                  {weather ? (
-                    <div className="space-y-3">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2.5">
-                          <div className="p-1.5 bg-slate-800 rounded-lg">
-                            {weather.condition.toLowerCase().includes('rain') ? <CloudRain className="w-4 h-4 text-blue-400" /> :
-                             weather.condition.toLowerCase().includes('thunder') ? <CloudLightning className="w-4 h-4 text-yellow-400" /> :
-                             weather.condition.toLowerCase().includes('clear') ? <SunMedium className="w-4 h-4 text-orange-400" /> :
-                             <Cloud className="w-4 h-4 text-slate-400" />}
-                          </div>
-                          <div>
-                            <p className="text-[9px] text-slate-500 uppercase font-bold tracking-widest leading-none mb-0.5">{weather.condition}</p>
-                            <p className="text-[10px] font-display font-medium text-slate-300 uppercase">{weather.locationName}</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-lg font-mono font-bold text-white leading-none">{Math.round(weather.temp)}°C</p>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2">
-                        <div className="bg-slate-950/50 rounded-lg p-2 border border-slate-800 flex items-center gap-2">
-                          <Wind className="w-2.5 h-2.5 text-slate-500" />
-                          <div>
-                            <p className="text-[7px] text-slate-600 uppercase font-bold tracking-widest">Wind</p>
-                            <p className="text-[9px] font-mono font-bold text-slate-300">{weather.windSpeed} km/h</p>
-                          </div>
-                        </div>
-                        <div className="bg-slate-950/50 rounded-lg p-2 border border-slate-800 flex items-center gap-2">
-                          <Thermometer className="w-2.5 h-2.5 text-slate-500" />
-                          <div>
-                            <p className="text-[7px] text-slate-600 uppercase font-bold tracking-widest">Humid</p>
-                            <p className="text-[9px] font-mono font-bold text-slate-300">{weather.humidity}%</p>
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="py-3 flex flex-col items-center justify-center">
-                      <div className="w-6 h-6 border-2 border-primary/20 border-t-primary rounded-full animate-spin mb-1.5" />
-                      <p className="text-[7px] text-slate-600 uppercase font-bold tracking-widest">Syncing Satellite...</p>
-                    </div>
-                  )}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
           {/* Zoom Controls */}
-          <div className="flex flex-col tactical-glass energy-border rounded-xl overflow-hidden shadow-xl">
-            <button 
-              onClick={() => setViewState(v => ({ ...v, zoom: v.zoom + 1 }))}
-              className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
-              title="Zoom In"
-            >
-              <Plus className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={() => setViewState(v => ({ ...v, zoom: v.zoom - 1 }))}
-              className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
-              title="Zoom Out"
-            >
-              <Minus className="w-5 h-5" />
-            </button>
-            <button 
-              onClick={() => setViewState(v => ({ ...v, pitch: 60, bearing: -20 }))}
-              className="p-3 hover:bg-slate-800 transition-colors text-slate-400"
-              title="Reset View"
-            >
-              <RotateCcw className="w-5 h-5" />
-            </button>
+          <div className="flex flex-col items-end gap-4">
+            <div className="hidden sm:flex items-center gap-4 px-4 py-2 apple-glass rounded-xl border border-white/5 pointer-events-auto">
+              <div className="flex flex-col items-end">
+                <span className="text-[7px] text-slate-500 uppercase font-bold tracking-[0.3em]">{t.coordinates}</span>
+                <span className="text-[10px] font-mono text-primary">
+                  {mapCoords.lat.toFixed(4)}°N / {mapCoords.lon.toFixed(4)}°E
+                </span>
+              </div>
+              <div className="w-px h-6 bg-white/10" />
+              <div className="flex items-center gap-2">
+                <div className="relative">
+                  <Radio className="w-3 h-3 text-secondary animate-pulse" />
+                  <div className="absolute inset-0 bg-secondary/20 rounded-full animate-ping" />
+                </div>
+                <span className="text-[8px] font-mono text-secondary uppercase tracking-widest">{t.satelliteUplink}</span>
+              </div>
+            </div>
+
+            <div className="flex flex-col tactical-glass energy-border rounded-xl overflow-hidden shadow-xl pointer-events-auto">
+              <button 
+                onClick={() => setViewState(v => ({ ...v, zoom: v.zoom + 1 }))}
+                className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
+                title="Zoom In"
+              >
+                <Plus className="w-5 h-5" />
+              </button>
+              <button 
+                onClick={() => setViewState(v => ({ ...v, zoom: v.zoom - 1 }))}
+                className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
+                title="Zoom Out"
+              >
+                <Minus className="w-5 h-5" />
+              </button>
+              <button 
+                onClick={() => setViewState(v => ({ ...v, pitch: 60, bearing: -20 }))}
+                className="p-3 hover:bg-slate-800 transition-colors text-slate-400"
+                title="Reset View"
+              >
+                <RotateCcw className="w-5 h-5" />
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1935,14 +1893,14 @@ export default function App() {
         </AnimatePresence>
 
         {/* AI Chat - Rule 3: Autonomous Intelligence */}
-        <div className="absolute bottom-4 sm:bottom-6 right-4 sm:right-6 flex flex-col items-end gap-3 pointer-events-auto">
+        <div className="absolute bottom-4 sm:bottom-6 right-4 sm:right-6 flex flex-col items-end gap-3 pointer-events-auto z-50">
           <AnimatePresence>
             {chatOpen && (
               <motion.div
                 initial={{ opacity: 0, y: 20, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                className="w-[calc(100vw-2rem)] sm:w-80 h-[60vh] sm:h-[450px] max-h-[500px] apple-glass rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+                className="w-[calc(100vw-2rem)] sm:w-80 h-[50vh] sm:h-[450px] max-h-[500px] apple-glass rounded-2xl shadow-2xl flex flex-col overflow-hidden"
               >
                 <div className="p-3 border-b border-border bg-primary/10 flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
@@ -2031,7 +1989,10 @@ export default function App() {
           </AnimatePresence>
 
           <button 
-            onClick={() => setChatOpen(!chatOpen)}
+            onClick={() => {
+              setChatOpen(!chatOpen);
+              if (!chatOpen && window.innerWidth < 640) setLegendOpen(false);
+            }}
             className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center shadow-[0_0_20px_rgba(var(--primary-accent),0.4)] hover:scale-105 transition-all active:scale-95 energy-border"
           >
             <MessageSquare className="w-5 h-5 text-white" />
@@ -2382,10 +2343,34 @@ export default function App() {
             className="absolute left-0 sm:left-4 top-0 sm:top-24 bottom-0 sm:bottom-24 w-full sm:w-72 z-40 flex flex-col gap-4 pointer-events-none p-4 sm:p-0 bg-base/80 sm:bg-transparent backdrop-blur-md sm:backdrop-blur-none"
           >
             <div className="flex sm:hidden justify-between items-center mb-4 pointer-events-auto">
-              <h2 className="homm-heading text-xl">{t.tacticalDashboard}</h2>
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                  <Building2 className="w-5 h-5 text-white" />
+                </div>
+                <h2 className="homm-heading text-xl">{t.title}</h2>
+              </div>
               <button onClick={() => setDashboardOpen(false)} className="p-2 apple-glass rounded-lg">
                 <X className="w-5 h-5" />
               </button>
+            </div>
+
+            {/* Mobile User Info */}
+            <div className="sm:hidden apple-glass rounded-2xl p-4 border border-white/10 pointer-events-auto mb-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-secondary/20 rounded-full flex items-center justify-center border border-secondary/30">
+                    <Wallet className="w-5 h-5 text-secondary" />
+                  </div>
+                  <div>
+                    <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.treasury}</p>
+                    <p className="text-sm font-mono font-bold text-secondary">${balance.toLocaleString()}</p>
+                  </div>
+                </div>
+                <div className="flex flex-col items-end">
+                  <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.role}</p>
+                  <p className="text-[10px] font-bold text-primary uppercase tracking-wider">{userRole}</p>
+                </div>
+              </div>
             </div>
             {/* System Status Card */}
             <div className="apple-glass rounded-2xl p-5 border border-white/10 pointer-events-auto shadow-[0_0_30px_rgba(0,0,0,0.5)]">
@@ -2496,7 +2481,7 @@ export default function App() {
       </AnimatePresence>
 
       {/* Dashboard Toggle */}
-      <div className="absolute left-4 top-4 z-40 pointer-events-auto">
+      <div className="absolute left-4 top-4 z-50 pointer-events-auto">
         <button 
           onClick={() => setDashboardOpen(!dashboardOpen)}
           className={cn(
