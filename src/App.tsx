@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useState, useMemo, useEffect, useCallback, Component, ErrorInfo, ReactNode } from 'react';
-import { Map, useControl, Layer, MapRef } from 'react-map-gl/maplibre';
+import { Map, useControl, Layer, MapRef, Marker } from 'react-map-gl/maplibre';
 import { MapboxOverlay, MapboxOverlayProps } from '@deck.gl/mapbox';
 import { createBuildingsLayer } from './layers/buildings';
 import { GoogleGenAI, Type } from "@google/genai";
@@ -36,6 +36,7 @@ import {
   X,
   ExternalLink,
   MapPin,
+  ChevronDown,
   Key,
   Settings,
   LogOut,
@@ -50,7 +51,6 @@ import {
   Play,
   Download,
   Filter,
-  ChevronDown,
   ChevronUp,
   Lock,
   Upload,
@@ -378,7 +378,13 @@ function DeckGLOverlay(props: MapboxOverlayProps) {
   return null;
 }
 
-const TacticalHUD = () => {
+const TacticalHUD = ({ lat, lon }: { lat: number, lon: number }) => {
+  const latInt = Math.abs(Math.floor(lat)).toString().padStart(2, '0');
+  const lonInt = Math.abs(Math.floor(lon)).toString().padStart(2, '0');
+  
+  const latDec = (lat % 1).toFixed(4).substring(2);
+  const lonDec = (lon % 1).toFixed(4).substring(2);
+
   return (
     <div className="fixed inset-0 pointer-events-none z-[55] flex items-center justify-center overflow-hidden">
       <div className="relative w-full h-full flex items-center justify-center">
@@ -386,14 +392,14 @@ const TacticalHUD = () => {
         <motion.div 
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="absolute top-[12%] flex flex-col items-center gap-1"
+          className="absolute top-[8%] sm:top-[12%] flex flex-col items-center gap-1 scale-75 sm:scale-100"
         >
           <div className="w-16 h-px bg-primary/20" />
           <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">Main Data</span>
-          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">00</span>
+          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">{latInt}</span>
           <div className="flex gap-6 mt-2 opacity-30">
-            <span className="text-[6px] font-mono text-primary tracking-widest">826 0363 775 P512</span>
-            <span className="text-[6px] font-mono text-primary tracking-widest">A0. 88. 4. 95</span>
+            <span className="text-[6px] font-mono text-primary tracking-widest">{lat.toFixed(6)}</span>
+            <span className="text-[6px] font-mono text-primary tracking-widest">A0. {latDec}. {lonDec}</span>
           </div>
         </motion.div>
 
@@ -401,13 +407,13 @@ const TacticalHUD = () => {
         <motion.div 
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="absolute bottom-[12%] flex flex-col items-center gap-1"
+          className="absolute bottom-[8%] sm:bottom-[12%] flex flex-col items-center gap-1 scale-75 sm:scale-100"
         >
           <div className="flex gap-6 mb-2 opacity-30">
-            <span className="text-[6px] font-mono text-primary tracking-widest">826 0363 775 P512</span>
-            <span className="text-[6px] font-mono text-primary tracking-widest">A0. 88. 4. 95</span>
+            <span className="text-[6px] font-mono text-primary tracking-widest">{lon.toFixed(6)}</span>
+            <span className="text-[6px] font-mono text-primary tracking-widest">A0. {latDec}. {lonDec}</span>
           </div>
-          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">00</span>
+          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">{lonInt}</span>
           <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">Main Data</span>
           <div className="w-16 h-px bg-primary/20" />
         </motion.div>
@@ -416,7 +422,7 @@ const TacticalHUD = () => {
         <motion.div 
           initial={{ opacity: 0, scale: 0.8 }}
           animate={{ opacity: 0.4, scale: 1 }}
-          className="relative w-96 h-96 flex items-center justify-center"
+          className="relative w-64 h-64 sm:w-96 sm:h-96 flex items-center justify-center"
         >
            <svg width="100%" height="100%" viewBox="0 0 200 200" className="absolute">
              <circle cx="100" cy="100" r="45" stroke="white" strokeWidth="0.5" fill="none" strokeDasharray="1 3" className="opacity-50" />
@@ -438,7 +444,7 @@ const TacticalHUD = () => {
         </motion.div>
 
         {/* Side Brackets */}
-        <div className="absolute left-[20%] sm:left-[28%] h-64 w-24 flex flex-col justify-between py-8 opacity-20">
+        <div className="absolute left-[5%] sm:left-[28%] h-64 w-24 hidden sm:flex flex-col justify-between py-8 opacity-20 scale-75 sm:scale-100">
            {[...Array(12)].map((_, i) => (
              <div key={i} className="flex items-center gap-2">
                <div className={cn("h-px bg-primary", i % 4 === 0 ? "w-4" : "w-2")} />
@@ -446,7 +452,7 @@ const TacticalHUD = () => {
              </div>
            ))}
         </div>
-        <div className="absolute right-[20%] sm:right-[28%] h-64 w-24 flex flex-col justify-between py-8 items-end opacity-20">
+        <div className="absolute right-[5%] sm:right-[28%] h-64 w-24 hidden sm:flex flex-col justify-between py-8 items-end opacity-20 scale-75 sm:scale-100">
            {[...Array(12)].map((_, i) => (
              <div key={i} className="flex items-center gap-2">
                {i % 4 === 0 && <span className="text-[6px] font-mono text-primary">{(100 - i * 8).toString().padStart(3, '0')}</span>}
@@ -456,19 +462,19 @@ const TacticalHUD = () => {
         </div>
 
         {/* Corner Markers */}
-        <div className="absolute top-[25%] left-[25%] flex flex-col gap-1 opacity-20">
+        <div className="absolute top-[15%] sm:top-[25%] left-[10%] sm:left-[25%] hidden sm:flex flex-col gap-1 opacity-20 scale-75 sm:scale-100">
           <span className="text-[8px] font-mono text-primary tracking-widest">A06.8024</span>
           <div className="w-4 h-4 border-t border-l border-primary" />
         </div>
-        <div className="absolute top-[25%] right-[25%] flex flex-col items-end gap-1 opacity-20">
+        <div className="absolute top-[15%] sm:top-[25%] right-[10%] sm:right-[25%] hidden sm:flex flex-col items-end gap-1 opacity-20 scale-75 sm:scale-100">
           <span className="text-[8px] font-mono text-primary tracking-widest">A06.8024</span>
           <div className="w-4 h-4 border-t border-r border-primary" />
         </div>
-        <div className="absolute bottom-[25%] left-[25%] flex flex-col gap-1 opacity-20">
+        <div className="absolute bottom-[15%] sm:bottom-[25%] left-[10%] sm:left-[25%] hidden sm:flex flex-col gap-1 opacity-20 scale-75 sm:scale-100">
           <div className="w-4 h-4 border-b border-l border-primary" />
           <span className="text-[8px] font-mono text-primary tracking-widest">A06.8024</span>
         </div>
-        <div className="absolute bottom-[25%] right-[25%] flex flex-col items-end gap-1 opacity-20">
+        <div className="absolute bottom-[15%] sm:bottom-[25%] right-[10%] sm:right-[25%] hidden sm:flex flex-col items-end gap-1 opacity-20 scale-75 sm:scale-100">
           <div className="w-4 h-4 border-b border-r border-primary" />
           <span className="text-[8px] font-mono text-primary tracking-widest">A06.8024</span>
         </div>
@@ -624,7 +630,6 @@ export default function App() {
     minRoi: 0,
     owner: ''
   });
-  const [briefingOpen, setBriefingOpen] = useState(false);
   const [dashboardOpen, setDashboardOpen] = useState(true);
   const [gridBrightness, setGridBrightness] = useState(0.1);
   const [scanlineIntensity, setScanlineIntensity] = useState(0.3);
@@ -993,7 +998,7 @@ export default function App() {
           { role: 'user', parts: [{ text: currentInput }] }
         ],
         config: {
-          systemInstruction: "You are a real estate analyst for YardSoft. Use the search_buildings tool to find properties and analyze_building to get detailed investment metrics for a specific building. Always provide a concise investment recommendation based on the data.",
+          systemInstruction: "You are a real estate analyst for Yard Invest. Use the search_buildings tool to find properties and analyze_building to get detailed investment metrics for a specific building. Always provide a concise investment recommendation based on the data.",
           tools: [{ functionDeclarations: [searchBuildingsTool, analyzeBuildingTool] }]
         }
       });
@@ -1049,10 +1054,12 @@ export default function App() {
       {/* Cinematic Overlays */}
       <div className="cinematic-overlay" />
       <div className="cinematic-vignette" />
-      <TacticalHUD />
+      <div className="crt-flicker" />
+      <div className="screen-scan-overlay" />
+      <TacticalHUD lat={viewState.latitude} lon={viewState.longitude} />
 
       {/* Tactical Alert Banner */}
-      <div className="absolute top-16 md:top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
+      <div className="absolute top-36 md:top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: [0, 1, 1, 0], y: [ -20, 0, 0, -20] }}
@@ -1103,25 +1110,23 @@ export default function App() {
               transition={{ duration: 1, ease: "easeOut" }}
               className="flex flex-col items-center"
             >
-              <div className="w-24 h-24 bg-primary rounded-[2rem] flex items-center justify-center shadow-[0_0_50px_rgba(var(--primary-accent),0.3)] mb-6">
-                <Building2 className="w-12 h-12 text-white" />
+              <div className="w-32 h-32 bg-white rounded-[2rem] flex items-center justify-center shadow-[0_0_50px_rgba(255,255,255,0.3)] mb-6 overflow-hidden p-4">
+                <img 
+                  src="https://storage.googleapis.com/ais-studio-user-uploads/lookastarik%40gmail.com/1712852995_logo.png" 
+                  alt="Yard Invest Logo" 
+                  className="w-full h-full object-contain"
+                  referrerPolicy="no-referrer"
+                />
               </div>
-              <h1 className="homm-heading text-4xl sm:text-6xl tracking-[0.3em] sm:tracking-[0.5em]">{t.title}</h1>
-              <p className="text-[8px] sm:text-xs text-primary font-mono mt-4 tracking-[0.5em] sm:tracking-[1em] uppercase opacity-50">{t.subtitle}</p>
+              <h1 className="homm-heading text-4xl sm:text-6xl tracking-[0.3em] sm:tracking-[0.5em]">YARD INVEST</h1>
+              <p className="text-[8px] sm:text-xs text-primary font-mono mt-4 tracking-[0.5em] sm:tracking-[1em] uppercase opacity-50">Strategic Asset Management System</p>
             </motion.div>
           </motion.div>
         )}
       </AnimatePresence>
 
       {/* Top Navigation */}
-      <div className="absolute top-4 right-4 z-50 flex items-center gap-2">
-        <button 
-          onClick={() => setBriefingOpen(true)}
-          className="apple-glass p-2 sm:px-4 sm:py-2 rounded-xl flex items-center gap-2 border border-secondary/30 text-secondary hover:bg-secondary/10 transition-all shadow-[0_0_15px_rgba(var(--secondary-accent),0.2)] pointer-events-auto"
-        >
-          <Info className="w-4 h-4" />
-          <span className="text-[10px] font-bold uppercase tracking-widest hidden lg:inline">{t.strategicBriefing}</span>
-        </button>
+      <div className="absolute bottom-4 left-4 sm:top-4 sm:right-4 sm:bottom-auto sm:left-auto z-50 flex items-center gap-2">
         {!user ? (
           <button 
             onClick={handleLogin}
@@ -1211,7 +1216,7 @@ export default function App() {
       {/* Search Bar */}
       <div className="absolute top-20 sm:top-4 left-1/2 -translate-x-1/2 z-40 w-full max-w-lg px-4 pointer-events-none">
         <div className="flex flex-col gap-2 pointer-events-auto">
-          <div className="apple-glass rounded-xl flex items-center px-4 py-2 group focus-within:ring-1 ring-primary/30 transition-all">
+          <div className="apple-glass rounded-xl flex items-center px-4 py-2 sm:py-2.5 group focus-within:ring-1 ring-primary/30 transition-all">
             <div className="relative flex items-center justify-center">
               <Search className={cn("w-4 h-4 text-slate-500 group-focus-within:text-primary transition-colors", isSearching && "opacity-0")} />
               {isSearching && (
@@ -1359,6 +1364,36 @@ export default function App() {
           reuseMaps
           transitionDuration={2000}
         >
+          {selectedBuilding && (
+            <Marker
+              longitude={selectedBuilding.geometry.coordinates[0]}
+              latitude={selectedBuilding.geometry.coordinates[1]}
+              anchor="bottom"
+            >
+              <motion.div
+                initial={{ y: -20, opacity: 0 }}
+                animate={{ y: 0, opacity: 1 }}
+                className="flex flex-col items-center pointer-events-none"
+              >
+                <div className="relative">
+                  {/* Animated Circle */}
+                  <div className="w-16 h-16 border-2 border-primary rounded-full animate-ping absolute -inset-4 opacity-20" />
+                  <div className="w-10 h-10 border border-primary rounded-full flex items-center justify-center bg-primary/10 backdrop-blur-sm shadow-[0_0_20px_rgba(var(--primary-accent),0.3)]">
+                    <div className="w-2 h-2 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary-accent),1)]" />
+                  </div>
+                  
+                  {/* Hanging Arrow */}
+                  <motion.div 
+                    animate={{ y: [0, -10, 0] }}
+                    transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+                    className="absolute -top-10 left-1/2 -translate-x-1/2"
+                  >
+                    <ChevronDown className="w-8 h-8 text-primary drop-shadow-[0_0_10px_rgba(var(--primary-accent),0.8)]" />
+                  </motion.div>
+                </div>
+              </motion.div>
+            </Marker>
+          )}
           <Layer
             id="3d-buildings"
             source="carto"
@@ -1523,6 +1558,22 @@ export default function App() {
                           Русский
                         </button>
                       </div>
+                    </div>
+
+                    <div className="space-y-3 pt-2 border-t border-white/5">
+                      <div className="flex justify-between items-center px-1">
+                        <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">{t.scanlineIntensity}</label>
+                        <span className="text-[10px] font-mono text-primary">{(scanlineIntensity * 100).toFixed(0)}%</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.01" 
+                        value={scanlineIntensity} 
+                        onChange={(e) => setScanlineIntensity(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-primary"
+                      />
                     </div>
                   </div>
                 </motion.div>
@@ -2000,80 +2051,6 @@ export default function App() {
         </div>
       </div>
 
-      {/* Strategic Briefing Modal */}
-      <AnimatePresence>
-        {briefingOpen && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-4 bg-base/90 backdrop-blur-xl">
-            <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full h-full sm:h-auto sm:max-w-2xl apple-glass sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-full sm:max-h-[90vh]"
-            >
-              <div className="p-6 border-b border-white/10 flex items-center justify-between bg-secondary/5">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-secondary rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(var(--secondary-accent),0.3)]">
-                    <Shield className="w-4 h-4 text-white" />
-                  </div>
-                  <div>
-                    <h2 className="text-lg font-display font-bold text-white tracking-tighter uppercase">{t.briefingTitle}</h2>
-                    <p className="text-[8px] text-secondary font-mono uppercase tracking-widest">Classification: TOP_SECRET // EYES_ONLY</p>
-                  </div>
-                </div>
-                <button onClick={() => setBriefingOpen(false)} className="text-slate-500 hover:text-white transition-colors">
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-
-              <div className="p-8 overflow-y-auto space-y-8 font-display">
-                <section className="space-y-3">
-                  <h3 className="text-xs font-bold text-white uppercase tracking-[0.2em] flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
-                    {t.briefingRisk}
-                  </h3>
-                  <p className="text-xs text-slate-400 leading-relaxed font-light">
-                    В 2026 году рынок недвижимости РФ функционирует в условиях полной технологической изоляции. Использование иностранных картографических сервисов и облачных БД приравнивается к компрометации активов. Основной риск — волатильность цифрового рубля и изменения в законодательстве о титульном владении.
-                  </p>
-                </section>
-
-                <section className="space-y-3">
-                  <h3 className="text-xs font-bold text-primary uppercase tracking-[0.2em] flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-primary" />
-                    {t.briefingOpportunity}
-                  </h3>
-                  <p className="text-xs text-slate-400 leading-relaxed font-light">
-                    Порог входа в 50 млн руб. отсекает неквалифицированный капитал, создавая закрытый клуб институциональных игроков. Комиссия 10% обоснована полным циклом юридического и технического сопровождения («Turnkey Business»). Платформа YARDSOFT обеспечивает суверенный контроль над данными через локальные SQL-узлы.
-                  </p>
-                </section>
-
-                <div className="grid grid-cols-3 gap-4 border-t border-white/5 pt-8">
-                  <div className="space-y-1">
-                    <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">Stack_Status</p>
-                    <p className="text-[10px] font-mono text-primary uppercase">Sovereign_OS</p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">Encryption</p>
-                    <p className="text-[10px] font-mono text-primary uppercase">AES_256_LOCAL</p>
-                  </div>
-                  <div className="space-y-1">
-                    <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">Target_ROI</p>
-                    <p className="text-[10px] font-mono text-secondary uppercase">18.4% AVG</p>
-                  </div>
-                </div>
-              </div>
-
-              <div className="p-4 bg-white/5 border-t border-white/10 flex justify-end">
-                <button 
-                  onClick={() => setBriefingOpen(false)}
-                  className="px-6 py-2 bg-secondary text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-secondary/80 transition-all shadow-[0_0_20px_rgba(var(--secondary-accent),0.3)]"
-                >
-                  {t.dismiss}
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
       {/* Building Details Modal */}
       <AnimatePresence>
         {selectedBuilding && (
@@ -2089,9 +2066,9 @@ export default function App() {
                 <div className="absolute inset-0 opacity-20 bg-[url('https://www.transparenttextures.com/patterns/carbon-fibre.png')]" />
                 <button 
                   onClick={() => setSelectedBuilding(null)}
-                  className="absolute top-3 right-3 p-1.5 bg-base/40 glass-hover rounded-full text-white transition-colors z-10"
+                  className="absolute top-3 right-3 p-2 sm:p-1.5 bg-base/40 glass-hover rounded-full text-white transition-colors z-10"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-5 h-5 sm:w-4 h-4" />
                 </button>
                 <div className="absolute -bottom-5 left-6 w-12 h-12 bg-primary rounded-xl shadow-[0_0_20px_rgba(var(--primary-accent),0.5)] flex items-center justify-center border-4 border-base">
                   <Building2 className="w-6 h-6 text-white" />
@@ -2426,54 +2403,6 @@ export default function App() {
                     </div>
                   </div>
                 </div>
-              </div>
-            </div>
-
-            {/* Global Valuation Card */}
-            <div className="apple-glass rounded-2xl p-5 border border-white/10 pointer-events-auto shadow-[0_0_30px_rgba(0,0,0,0.5)] flex-1 overflow-hidden flex flex-col">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="w-8 h-8 bg-secondary/10 rounded-lg flex items-center justify-center border border-secondary/30">
-                  <TrendingUp className="w-4 h-4 text-secondary" />
-                </div>
-                <div>
-                  <h3 className="text-[10px] font-display font-bold text-white uppercase tracking-[0.2em]">{t.globalValuation}</h3>
-                  <p className="text-[8px] text-slate-500 font-mono uppercase tracking-widest">Sector_01 // Global_Intel</p>
-                </div>
-              </div>
-
-              <div className="space-y-6 flex-1 overflow-y-auto scrollbar-hide">
-                <div className="space-y-1">
-                  <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.valuation}</p>
-                  <p className="text-2xl font-mono font-bold text-white tracking-tighter">
-                    $12.4B<span className="text-xs text-primary ml-2">+2.4%</span>
-                  </p>
-                </div>
-
-                <div className="space-y-4 pt-4 border-t border-white/5">
-                  <h4 className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em] mb-3">{t.sectorAnalysis}</h4>
-                  
-                  {[
-                    { label: 'Residential', value: '$4.2B', color: 'bg-primary' },
-                    { label: 'Commercial', value: '$5.8B', color: 'bg-secondary' },
-                    { label: 'Industrial', value: '$2.4B', color: 'bg-slate-500' }
-                  ].map((item, i) => (
-                    <div key={i} className="space-y-1.5">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[8px] text-slate-400 uppercase font-mono">{item.label}</span>
-                        <span className="text-[9px] font-mono text-white">{item.value}</span>
-                      </div>
-                      <div className="h-1 bg-white/5 rounded-full overflow-hidden">
-                        <div className={cn("h-full", item.color)} style={{ width: i === 0 ? '35%' : i === 1 ? '45%' : '20%' }} />
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              <div className="mt-6 pt-4 border-t border-white/5">
-                <button className="w-full py-2 bg-primary/10 hover:bg-primary/20 border border-primary/30 rounded-xl text-[8px] font-bold text-primary uppercase tracking-[0.3em] transition-all">
-                  Generate_Full_Report
-                </button>
               </div>
             </div>
           </motion.div>

@@ -214,4 +214,31 @@
     from { transform: translateY(-200px); }
     to { transform: translateY(100vh); }
   }
+
+  .crt-flicker {
+    @apply fixed inset-0 pointer-events-none z-[100];
+    background: rgba(18, 16, 16, 0);
+    opacity: 0.05;
+    animation: crt-flicker 0.1s infinite;
+  }
+
+  @keyframes crt-flicker {
+    0% { opacity: 0.03; }
+    50% { opacity: 0.06; }
+    100% { opacity: 0.03; }
+  }
+
+  .screen-scan-overlay {
+    @apply fixed inset-0 pointer-events-none z-[101];
+    background: linear-gradient(
+      rgba(18, 16, 16, 0) 50%,
+      rgba(0, 0, 0, 0.1) 50%
+    ), linear-gradient(
+      90deg,
+      rgba(255, 0, 0, 0.03),
+      rgba(0, 255, 0, 0.01),
+      rgba(0, 0, 255, 0.03)
+    );
+    background-size: 100% 3px, 3px 100%;
+  }
 }
