@@ -4,7 +4,7 @@ import { Map, useControl, Layer, MapRef, Marker } from 'react-map-gl/maplibre';
 import { MapboxOverlay, MapboxOverlayProps } from '@deck.gl/mapbox';
 import { createBuildingsLayer } from './layers/buildings';
 import { GoogleGenAI, Type } from "@google/genai";
-import { auth } from './firebase';
+import { auth, db } from './firebase';
 import { 
   onAuthStateChanged, 
   signInWithPopup, 
@@ -12,6 +12,16 @@ import {
   signOut,
   User as FirebaseUser
 } from 'firebase/auth';
+import { 
+  collection, 
+  addDoc, 
+  onSnapshot, 
+  query, 
+  orderBy, 
+  serverTimestamp,
+  doc,
+  getDocFromServer
+} from 'firebase/firestore';
 import { 
   Building2, 
   Shield, 
@@ -63,12 +73,12 @@ import {
   Target,
   AlertTriangle
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { cn } from './lib/utils';
 
 // Types
 interface BuildingInfo {
-  id: number;
+  id: number | string;
   x?: number;
   y?: number;
   properties: {
@@ -76,7 +86,39 @@ interface BuildingInfo {
     roi?: number;
     status?: number;
     owner?: string;
+    title?: string;
+    cost?: number;
+    yield?: number;
+    type?: string;
+    address?: string;
+    description?: string;
+    sqft?: number;
+    yearBuilt?: number;
+    parkingSpaces?: number;
   };
+  geometry?: {
+    type: string;
+    coordinates: [number, number];
+  };
+}
+
+interface Asset {
+  id: string;
+  title: string;
+  latitude: number;
+  longitude: number;
+  cost: number;
+  yield: number;
+  roi: number;
+  status: number;
+  type: string;
+  ownerUid: string;
+  address: string;
+  description: string;
+  sqft?: number;
+  yearBuilt?: number;
+  parkingSpaces?: number;
+  createdAt: any;
 }
 
 interface MediaItem {
@@ -278,8 +320,24 @@ const translations = {
     globalValuation: "Global Valuation",
     sectorAnalysis: "Sector Analysis",
     gridBrightness: "Grid Intensity",
-    scanlineIntensity: "Scanline Intensity",
+    scanlineIntensity: "Screen Scanlines",
+    buildingScanlines: "Building Scanlines",
     systemConfig: "System Config",
+    createAsset: "Create Asset",
+    assetTitle: "Asset Title",
+    assetType: "Asset Type",
+    assetCost: "Initial Cost",
+    assetYield: "Monthly Yield",
+    assetDescription: "Strategic Description",
+    assetAddress: "Strategic Address",
+    assetLat: "Latitude",
+    assetLon: "Longitude",
+    assetCreating: "Initializing Asset...",
+    assetCreated: "Asset Secured",
+    retail: "Retail",
+    office: "Office",
+    warehouse: "Warehouse",
+    residential: "Residential",
   },
   ru: {
     title: "YARDSOFT",
@@ -361,8 +419,24 @@ const translations = {
     globalValuation: "Глобальная Оценка",
     sectorAnalysis: "Анализ Сектора",
     gridBrightness: "Яркость Сетки",
-    scanlineIntensity: "Яркость Сканирования",
+    scanlineIntensity: "Сканирование Экрана",
+    buildingScanlines: "Сканирование Зданий",
     systemConfig: "Конфиг Системы",
+    createAsset: "Создать Объект",
+    assetTitle: "Название Объекта",
+    assetType: "Тип Объекта",
+    assetCost: "Стоимость",
+    assetYield: "Месячный Доход",
+    assetDescription: "Описание",
+    assetAddress: "Адрес",
+    assetLat: "Широта",
+    assetLon: "Долгота",
+    assetCreating: "Инициализация Объекта...",
+    assetCreated: "Объект Закреплен",
+    retail: "Торговля",
+    office: "Офис",
+    warehouse: "Склад",
+    residential: "Жилое",
   }
 };
 
@@ -378,12 +452,58 @@ function DeckGLOverlay(props: MapboxOverlayProps) {
   return null;
 }
 
+const ParallaxCard = ({ children, className }: { children: React.ReactNode, className?: string }) => {
+  const x = useMotionValue(0);
+  const y = useMotionValue(0);
+
+  const mouseXSpring = useSpring(x);
+  const mouseYSpring = useSpring(y);
+
+  const rotateX = useTransform(mouseYSpring, [-0.5, 0.5], ["5deg", "-5deg"]);
+  const rotateY = useTransform(mouseXSpring, [-0.5, 0.5], ["-5deg", "5deg"]);
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const width = rect.width;
+    const height = rect.height;
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+    const xPct = mouseX / width - 0.5;
+    const yPct = mouseY / height - 0.5;
+    x.set(xPct);
+    y.set(yPct);
+  };
+
+  const handleMouseLeave = () => {
+    x.set(0);
+    y.set(0);
+  };
+
+  return (
+    <motion.div
+      onMouseMove={handleMouseMove}
+      onMouseLeave={handleMouseLeave}
+      style={{
+        rotateX,
+        rotateY,
+        transformStyle: "preserve-3d",
+        perspective: "1000px"
+      }}
+      className={cn("depth-card", className)}
+    >
+      <div style={{ transform: "translateZ(20px)", transformStyle: "preserve-3d" }}>
+        {children}
+      </div>
+    </motion.div>
+  );
+};
+
 const TacticalHUD = ({ lat, lon }: { lat: number, lon: number }) => {
   const latInt = Math.abs(Math.floor(lat)).toString().padStart(2, '0');
   const lonInt = Math.abs(Math.floor(lon)).toString().padStart(2, '0');
   
-  const latDec = (lat % 1).toFixed(4).substring(2);
-  const lonDec = (lon % 1).toFixed(4).substring(2);
+  const latDec = (Math.abs(lat) % 1).toFixed(4).substring(2);
+  const lonDec = (Math.abs(lon) % 1).toFixed(4).substring(2);
 
   return (
     <div className="fixed inset-0 pointer-events-none z-[55] flex items-center justify-center overflow-hidden">
@@ -396,7 +516,7 @@ const TacticalHUD = ({ lat, lon }: { lat: number, lon: number }) => {
         >
           <div className="w-16 h-px bg-primary/20" />
           <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">Main Data</span>
-          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">{latInt}</span>
+          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">{latInt}.<span className="text-xs opacity-50">{latDec}</span></span>
           <div className="flex gap-6 mt-2 opacity-30">
             <span className="text-[6px] font-mono text-primary tracking-widest">{lat.toFixed(6)}</span>
             <span className="text-[6px] font-mono text-primary tracking-widest">A0. {latDec}. {lonDec}</span>
@@ -413,7 +533,7 @@ const TacticalHUD = ({ lat, lon }: { lat: number, lon: number }) => {
             <span className="text-[6px] font-mono text-primary tracking-widest">{lon.toFixed(6)}</span>
             <span className="text-[6px] font-mono text-primary tracking-widest">A0. {latDec}. {lonDec}</span>
           </div>
-          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">{lonInt}</span>
+          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">{lonInt}.<span className="text-xs opacity-50">{lonDec}</span></span>
           <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">Main Data</span>
           <div className="w-16 h-px bg-primary/20" />
         </motion.div>
@@ -493,6 +613,9 @@ export default function App() {
   const mapRef = React.useRef<MapRef>(null);
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = React.useRef<Blob[]>([]);
+  const [isRecording, setIsRecording] = useState(false);
   
   // State
   const [viewState, setViewState] = useState({
@@ -529,6 +652,8 @@ export default function App() {
   const [showLogo, setShowLogo] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchMarker, setSearchMarker] = useState<{ lat: number, lon: number, name: string } | null>(null);
   const [pulse, setPulse] = useState(0);
   // Firebase Auth Listener
   useEffect(() => {
@@ -622,6 +747,7 @@ export default function App() {
     }
   }, [selectedBuilding]);
   const [isCapturing, setIsCapturing] = useState<'photo' | 'video' | null>(null);
+  const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
 
   // Advanced Filters State
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -633,7 +759,10 @@ export default function App() {
   const [dashboardOpen, setDashboardOpen] = useState(true);
   const [gridBrightness, setGridBrightness] = useState(0.1);
   const [scanlineIntensity, setScanlineIntensity] = useState(0.3);
+  const [buildingScanlineIntensity, setBuildingScanlineIntensity] = useState(0.2);
   const [mapCoords, setMapCoords] = useState({ lat: 55.7558, lon: 37.6173 });
+  const [userAssets, setUserAssets] = useState<Asset[]>([]);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
 
   const [buildingsData, setBuildingsData] = useState<any>(null);
 
@@ -658,6 +787,24 @@ export default function App() {
     }
   }, [user, isAuthReady]);
 
+  // Real-time Assets Listener
+  useEffect(() => {
+    if (!isAuthReady) return;
+
+    const q = query(collection(db, "assets"), orderBy("createdAt", "desc"));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const assets: Asset[] = [];
+      snapshot.forEach((doc) => {
+        assets.push({ id: doc.id, ...doc.data() } as Asset);
+      });
+      setUserAssets(assets);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "assets");
+    });
+
+    return () => unsubscribe();
+  }, [isAuthReady]);
+
   const toggleStatusFilter = (status: string) => {
     setFilters(prev => ({
       ...prev,
@@ -669,9 +816,39 @@ export default function App() {
 
   const filteredBuildings = useMemo(() => {
     if (!buildingsData) return null;
+    
+    // Combine static buildings with user assets
+    const userFeatures = userAssets.map(asset => ({
+      type: 'Feature',
+      id: asset.id,
+      geometry: {
+        type: 'Point',
+        coordinates: [asset.longitude, asset.latitude]
+      },
+      properties: {
+        id: asset.id,
+        title: asset.title,
+        height: 20, // Default height for user assets
+        cost: asset.cost,
+        yield: asset.yield,
+        roi: asset.roi,
+        status: asset.status + 1, // Map status to 1, 2, 3
+        owner: asset.ownerUid === user?.uid ? 'YOU' : 'OTHER',
+        type: asset.type,
+        isUserAsset: true,
+        address: asset.address,
+        description: asset.description,
+        sqft: asset.sqft,
+        yearBuilt: asset.yearBuilt,
+        parkingSpaces: asset.parkingSpaces
+      }
+    }));
+
+    const combinedFeatures = [...buildingsData.features, ...userFeatures];
+
     return {
       ...buildingsData,
-      features: buildingsData.features.filter((f: any) => {
+      features: combinedFeatures.filter((f: any) => {
         const props = f.properties;
         const status = props.status === 1 ? 'stable' : props.status === 2 ? 'risk' : props.status === 3 ? 'anomalous' : 'other';
         if (!filters.statuses.includes(status)) return false;
@@ -680,7 +857,7 @@ export default function App() {
         return true;
       })
     };
-  }, [buildingsData, filters]);
+  }, [buildingsData, filters, userAssets, user]);
 
   const t = translations[language];
 
@@ -693,6 +870,20 @@ export default function App() {
     };
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
+  }, []);
+
+  // Connection Test
+  useEffect(() => {
+    const testConnection = async () => {
+      try {
+        await getDocFromServer(doc(db, 'test', 'connection'));
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('the client is offline')) {
+          console.error("Firestore is offline. Check your configuration.");
+        }
+      }
+    };
+    testConnection();
   }, []);
 
   // Logo timeout
@@ -743,20 +934,28 @@ export default function App() {
     
     setIsSearching(true);
     try {
-      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`);
+      const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5`);
       const data = await response.json();
       
-      if (data && data.length > 0) {
-        const { lat, lon } = data[0];
-        mapRef.current?.flyTo({
-          center: [parseFloat(lon), parseFloat(lat)],
-          zoom: 16,
-          duration: 3000,
-          essential: true
-        });
-        setSearchQuery('');
-      } else {
-        // Show some feedback if no results found
+      setSearchResults(data);
+      
+      if (data && data.length === 1) {
+        const { lat, lon, display_name } = data[0];
+        const latitude = parseFloat(lat);
+        const longitude = parseFloat(lon);
+        
+        if (!isNaN(latitude) && !isNaN(longitude)) {
+          mapRef.current?.flyTo({
+            center: [longitude, latitude],
+            zoom: 16,
+            duration: 3000,
+            essential: true
+          });
+          
+          setSearchMarker({ lat: latitude, lon: longitude, name: display_name });
+          setSearchResults([]);
+        }
+      } else if (data && data.length === 0) {
         console.warn("No search results found for:", searchQuery);
       }
     } catch (error) {
@@ -765,6 +964,77 @@ export default function App() {
       setIsSearching(false);
     }
   }, [searchQuery]);
+
+  const selectSearchResult = (result: any) => {
+    const { lat, lon, display_name } = result;
+    const latitude = parseFloat(lat);
+    const longitude = parseFloat(lon);
+    
+    if (isNaN(latitude) || isNaN(longitude)) return;
+
+    mapRef.current?.flyTo({
+      center: [longitude, latitude],
+      zoom: 16,
+      duration: 3000,
+      essential: true
+    });
+    
+    setSearchMarker({ lat: latitude, lon: longitude, name: display_name });
+    setSearchResults([]);
+    setSearchQuery(display_name);
+  };
+
+  const [newAsset, setNewAsset] = useState({
+    title: '',
+    type: 'retail',
+    cost: 0,
+    yield: 0,
+    description: '',
+    address: '',
+    latitude: 55.7558,
+    longitude: 37.6173,
+    sqft: 0,
+    yearBuilt: new Date().getFullYear(),
+    parkingSpaces: 0
+  });
+  const [isCreating, setIsCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+
+  const handleCreateAsset = async () => {
+    if (!user) return;
+    setIsCreating(true);
+    setCreateError(null);
+    try {
+      const roi = newAsset.cost > 0 ? (newAsset.yield * 12 / newAsset.cost) * 100 : 0;
+      const assetData = {
+        ...newAsset,
+        roi,
+        status: 0, // Default stable
+        ownerUid: user.uid,
+        createdAt: serverTimestamp()
+      };
+      await addDoc(collection(db, "assets"), assetData);
+      setCreateModalOpen(false);
+      setNewAsset({
+        title: '',
+        type: 'retail',
+        cost: 0,
+        yield: 0,
+        description: '',
+        address: '',
+        latitude: viewState.latitude,
+        longitude: viewState.longitude,
+        sqft: 0,
+        yearBuilt: new Date().getFullYear(),
+        parkingSpaces: 0
+      });
+    } catch (error) {
+      handleFirestoreError(error, OperationType.CREATE, "assets");
+      setCreateError(error instanceof Error ? error.message : "Failed to create asset. Check your connection.");
+    } finally {
+      setIsCreating(false);
+    }
+  };
 
   const basemaps = [
     { id: 'dark', name: 'Dark Matter', url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json' },
@@ -783,9 +1053,10 @@ export default function App() {
       (info) => setSelectedBuilding(info),
       pulse,
       selectedBuilding?.id || null,
-      viewState.zoom
+      viewState.zoom,
+      buildingScanlineIntensity
     ) : null
-  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom]);
+  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, buildingScanlineIntensity]);
 
   const handleBuyBuilding = async (id: number, cost: number, yieldAmount: number) => {
     if (balance >= cost && !portfolio.includes(id)) {
@@ -875,8 +1146,59 @@ export default function App() {
         videoRef.current.play();
       }
       setIsCapturing(type);
+      setIsRecording(false);
+      recordedChunksRef.current = [];
     } catch (err) {
       console.error("Failed to access media devices:", err);
+    }
+  };
+
+  const startRecording = () => {
+    if (!videoRef.current?.srcObject) return;
+    const stream = videoRef.current.srcObject as MediaStream;
+    const mediaRecorder = new MediaRecorder(stream);
+    
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data.size > 0) {
+        recordedChunksRef.current.push(event.data);
+      }
+    };
+
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(recordedChunksRef.current, { type: 'video/webm' });
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        const url = reader.result as string;
+        if (selectedBuilding) {
+          try {
+            const res = await fetch(`/api/v1/buildings/${selectedBuilding.id}/media`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ type: 'video', url })
+            });
+            const newItem = await res.json();
+            setBuildingMedia(prev => ({
+              ...prev,
+              [selectedBuilding.id]: [newItem, ...(prev[selectedBuilding.id] || [])]
+            }));
+          } catch (err) {
+            console.error("Failed to save video:", err);
+          }
+        }
+      };
+      reader.readAsDataURL(blob);
+    };
+
+    mediaRecorder.start();
+    mediaRecorderRef.current = mediaRecorder;
+    setIsRecording(true);
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      stopCapture();
     }
   };
 
@@ -922,6 +1244,7 @@ export default function App() {
     const file = e.target.files?.[0];
     if (!file || !selectedBuilding) return;
 
+    const type = file.type.startsWith('video/') ? 'video' : 'photo';
     const reader = new FileReader();
     reader.onloadend = async () => {
       const url = reader.result as string;
@@ -929,7 +1252,7 @@ export default function App() {
         const res = await fetch(`/api/v1/buildings/${selectedBuilding.id}/media`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ type: 'photo', url })
+          body: JSON.stringify({ type, url })
         });
         const newItem = await res.json();
         
@@ -938,7 +1261,7 @@ export default function App() {
           [selectedBuilding.id]: [newItem, ...(prev[selectedBuilding.id] || [])]
         }));
       } catch (err) {
-        console.error("Failed to upload photo:", err);
+        console.error("Failed to upload media:", err);
       }
     };
     reader.readAsDataURL(file);
@@ -1055,7 +1378,7 @@ export default function App() {
       <div className="cinematic-overlay" />
       <div className="cinematic-vignette" />
       <div className="crt-flicker" />
-      <div className="screen-scan-overlay" />
+      <div className="screen-scan-overlay" style={{ opacity: scanlineIntensity }} />
       <TacticalHUD lat={viewState.latitude} lon={viewState.longitude} />
 
       {/* Tactical Alert Banner */}
@@ -1228,12 +1551,28 @@ export default function App() {
             <input 
               type="text"
               value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
+              onChange={(e) => {
+                setSearchQuery(e.target.value);
+                if (!e.target.value.trim()) setSearchResults([]);
+              }}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
               placeholder={t.searchPlaceholder}
               className="flex-1 bg-transparent border-none outline-none px-3 text-xs font-display tracking-widest text-slate-200 placeholder:text-slate-600"
             />
             <div className="flex items-center gap-2">
+              {(searchQuery.trim() || searchMarker) && (
+                <button 
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSearchResults([]);
+                    setSearchMarker(null);
+                  }}
+                  className="p-1 hover:bg-white/5 rounded-lg text-slate-500 transition-colors"
+                  title="Clear Search"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
               {searchQuery.trim() && (
                 <button 
                   onClick={handleSearch}
@@ -1259,6 +1598,38 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* Search Results Dropdown */}
+          <AnimatePresence>
+            {searchResults.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: -10 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -10 }}
+                className="apple-glass rounded-xl overflow-hidden border border-white/10 shadow-2xl mt-2 pointer-events-auto"
+              >
+                <div className="max-h-60 overflow-y-auto scrollbar-hide">
+                  {searchResults.map((result, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => selectSearchResult(result)}
+                      className="w-full px-4 py-3 flex items-start gap-3 hover:bg-white/5 transition-colors border-b border-white/5 last:border-none text-left"
+                    >
+                      <MapPin className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-[10px] font-display font-bold text-slate-200 uppercase tracking-wider line-clamp-1">
+                          {result.display_name.split(',')[0]}
+                        </p>
+                        <p className="text-[8px] font-mono text-slate-500 uppercase tracking-tight line-clamp-1">
+                          {result.display_name.split(',').slice(1).join(',').trim()}
+                        </p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
 
           {/* Advanced Filters Dropdown */}
           <AnimatePresence>
@@ -1358,13 +1729,21 @@ export default function App() {
         <Map
           ref={mapRef}
           {...viewState}
-          onMove={e => setViewState(e.viewState)}
+          onMove={e => {
+            if (isNaN(e.viewState.latitude) || isNaN(e.viewState.longitude)) return;
+            setViewState(e.viewState);
+            setMapCoords({ lat: e.viewState.latitude, lon: e.viewState.longitude });
+          }}
           mapStyle={basemap}
           style={{ width: '100%', height: '100%' }}
           reuseMaps
           transitionDuration={2000}
         >
-          {selectedBuilding && (
+          {selectedBuilding && 
+           selectedBuilding.geometry && 
+           selectedBuilding.geometry.coordinates && 
+           !isNaN(selectedBuilding.geometry.coordinates[0]) && 
+           !isNaN(selectedBuilding.geometry.coordinates[1]) && (
             <Marker
               longitude={selectedBuilding.geometry.coordinates[0]}
               latitude={selectedBuilding.geometry.coordinates[1]}
@@ -1378,8 +1757,8 @@ export default function App() {
                 <div className="relative">
                   {/* Animated Circle */}
                   <div className="w-16 h-16 border-2 border-primary rounded-full animate-ping absolute -inset-4 opacity-20" />
-                  <div className="w-10 h-10 border border-primary rounded-full flex items-center justify-center bg-primary/10 backdrop-blur-sm shadow-[0_0_20px_rgba(var(--primary-accent),0.3)]">
-                    <div className="w-2 h-2 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary-accent),1)]" />
+                  <div className="w-12 h-12 border-2 border-primary rounded-full flex items-center justify-center bg-primary/20 backdrop-blur-md shadow-[0_0_30px_rgba(var(--primary-accent-rgb),0.5)] pulsate-glow">
+                    <div className="w-3 h-3 bg-primary rounded-full shadow-[0_0_15px_rgba(var(--primary-accent-rgb),1)] pulsate-glow" />
                   </div>
                   
                   {/* Hanging Arrow */}
@@ -1388,12 +1767,67 @@ export default function App() {
                     transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
                     className="absolute -top-10 left-1/2 -translate-x-1/2"
                   >
-                    <ChevronDown className="w-8 h-8 text-primary drop-shadow-[0_0_10px_rgba(var(--primary-accent),0.8)]" />
+                    <ChevronDown className="w-8 h-8 text-primary drop-shadow-[0_0_10px_rgba(var(--primary-accent-rgb),0.8)] pulsate-glow" />
                   </motion.div>
                 </div>
               </motion.div>
             </Marker>
           )}
+
+          {searchMarker && !isNaN(searchMarker.lon) && !isNaN(searchMarker.lat) && (
+            <Marker
+              longitude={searchMarker.lon}
+              latitude={searchMarker.lat}
+              anchor="bottom"
+            >
+              <motion.div
+                initial={{ scale: 0 }}
+                animate={{ scale: 1 }}
+                className="flex flex-col items-center pointer-events-none"
+              >
+                <div className="relative">
+                  <div className="absolute -inset-4 bg-secondary/20 rounded-full blur-xl animate-pulse" />
+                  <div className="relative w-8 h-8 bg-secondary/20 backdrop-blur-sm rounded-full shadow-[0_0_20px_rgba(var(--secondary-accent-rgb),0.3)] flex items-center justify-center border-2 border-secondary/40 pulsate-glow-secondary">
+                    <Target className="w-5 h-5 text-secondary" />
+                  </div>
+                </div>
+                <div className="mt-2 px-3 py-1 bg-slate-900/90 backdrop-blur-md border border-white/10 rounded-full shadow-xl max-w-[150px]">
+                  <span className="text-[8px] font-display font-bold text-white uppercase tracking-tight line-clamp-1">
+                    {searchMarker.name}
+                  </span>
+                </div>
+              </motion.div>
+            </Marker>
+          )}
+
+          {/* Multiple Search Results Markers */}
+          {searchResults.length > 0 && searchResults.map((result, idx) => {
+            const lon = parseFloat(result.lon);
+            const lat = parseFloat(result.lat);
+            if (isNaN(lon) || isNaN(lat)) return null;
+            
+            return (
+              <Marker
+                key={`result-${idx}`}
+                longitude={lon}
+                latitude={lat}
+                anchor="bottom"
+              >
+                <motion.div
+                  initial={{ scale: 0, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  transition={{ delay: idx * 0.05 }}
+                  className="flex flex-col items-center pointer-events-none"
+                >
+                  <div className="relative">
+                    <div className="w-6 h-6 bg-secondary/10 backdrop-blur-sm rounded-full border border-secondary/30 flex items-center justify-center pulsate-glow-secondary">
+                      <div className="w-1.5 h-1.5 bg-secondary rounded-full" />
+                    </div>
+                  </div>
+                </motion.div>
+              </Marker>
+            );
+          })}
           <Layer
             id="3d-buildings"
             source="carto"
@@ -1562,7 +1996,10 @@ export default function App() {
 
                     <div className="space-y-3 pt-2 border-t border-white/5">
                       <div className="flex justify-between items-center px-1">
-                        <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">{t.scanlineIntensity}</label>
+                        <div className="flex items-center gap-2">
+                          <Terminal className="w-3 h-3 text-slate-500" />
+                          <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">{t.scanlineIntensity}</label>
+                        </div>
                         <span className="text-[10px] font-mono text-primary">{(scanlineIntensity * 100).toFixed(0)}%</span>
                       </div>
                       <input 
@@ -1572,6 +2009,25 @@ export default function App() {
                         step="0.01" 
                         value={scanlineIntensity} 
                         onChange={(e) => setScanlineIntensity(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-primary"
+                      />
+                    </div>
+
+                    <div className="space-y-3 pt-2 border-t border-white/5">
+                      <div className="flex justify-between items-center px-1">
+                        <div className="flex items-center gap-2">
+                          <Building2 className="w-3 h-3 text-slate-500" />
+                          <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">{t.buildingScanlines}</label>
+                        </div>
+                        <span className="text-[10px] font-mono text-primary">{(buildingScanlineIntensity * 100).toFixed(0)}%</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.01" 
+                        value={buildingScanlineIntensity} 
+                        onChange={(e) => setBuildingScanlineIntensity(parseFloat(e.target.value))}
                         className="w-full h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-primary"
                       />
                     </div>
@@ -1824,7 +2280,7 @@ export default function App() {
               <div className="w-px h-6 bg-white/10" />
               <div className="flex items-center gap-2">
                 <div className="relative">
-                  <Radio className="w-3 h-3 text-secondary animate-pulse" />
+                  <Radio className="w-3 h-3 text-secondary pulsate-glow" />
                   <div className="absolute inset-0 bg-secondary/20 rounded-full animate-ping" />
                 </div>
                 <span className="text-[8px] font-mono text-secondary uppercase tracking-widest">{t.satelliteUplink}</span>
@@ -1951,17 +2407,19 @@ export default function App() {
                 initial={{ opacity: 0, y: 20, scale: 0.95 }}
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 20, scale: 0.95 }}
-                className="w-[calc(100vw-2rem)] sm:w-80 h-[50vh] sm:h-[450px] max-h-[500px] apple-glass rounded-2xl shadow-2xl flex flex-col overflow-hidden"
+                className="w-[calc(100vw-2rem)] sm:w-80 h-[50vh] sm:h-[450px] max-h-[500px] flex flex-col overflow-hidden"
               >
+                <ParallaxCard className="flex-1 flex flex-col">
+                  <div className="apple-glass rounded-2xl border border-border bg-base/40 backdrop-blur-xl shadow-2xl flex-1 flex flex-col overflow-hidden">
                 <div className="p-3 border-b border-border bg-primary/10 flex items-center justify-between">
                   <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(var(--primary-accent),0.5)]">
+                    <div className="w-7 h-7 bg-primary rounded-lg flex items-center justify-center shadow-[0_0_10px_rgba(var(--primary-accent),0.5)] pulsate-glow">
                       <Terminal className="w-3.5 h-3.5 text-white" />
                     </div>
                     <div>
                       <h3 className="text-[10px] font-display font-bold text-[var(--text-main)] uppercase tracking-widest">{t.aiAnalyst}</h3>
                       <div className="flex items-center gap-1.5">
-                        <div className="w-1 h-1 rounded-full bg-secondary animate-pulse" />
+                        <div className="w-1 h-1 rounded-full bg-secondary pulsate-glow" />
                         <p className="text-[8px] text-secondary font-mono uppercase tracking-widest">Strategic_Intelligence_Unit</p>
                       </div>
                     </div>
@@ -2035,7 +2493,9 @@ export default function App() {
                     </button>
                   </div>
                 </div>
-              </motion.div>
+              </div>
+            </ParallaxCard>
+          </motion.div>
             )}
           </AnimatePresence>
 
@@ -2078,10 +2538,14 @@ export default function App() {
               <div className="p-5 sm:p-6 pt-8 sm:pt-10 overflow-y-auto flex-1 scrollbar-hide">
                 <div className="flex justify-between items-start mb-6">
                   <div>
-                    <h2 className="text-xl font-display font-bold text-[var(--text-main)] tracking-tight uppercase">{t.portfolio}</h2>
+                    <h2 className="text-xl font-display font-bold text-[var(--text-main)] tracking-tight uppercase">
+                      {selectedBuilding.properties.title || t.portfolio}
+                    </h2>
                     <div className="flex items-center gap-2 mt-0.5 text-slate-500 font-mono text-[9px] tracking-widest uppercase">
                       <MapPin className="w-2.5 h-2.5" />
-                      <span>{t.sector}_01 // ID: {selectedBuilding.id}</span>
+                      <span>
+                        {selectedBuilding.properties.address || `${t.sector}_01 // ID: ${selectedBuilding.id}`}
+                      </span>
                     </div>
                   </div>
                   <div className={cn(
@@ -2116,9 +2580,13 @@ export default function App() {
                   <div className="bg-surface rounded-xl p-3 sm:p-4 border border-border flex flex-col justify-between">
                     <div className="flex items-center gap-2 mb-1">
                       <Layers className="w-3 h-3 text-slate-500" />
-                      <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.elevation}</p>
+                      <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">
+                        {selectedBuilding.properties.type ? t.assetType : t.elevation}
+                      </p>
                     </div>
-                    <p className="text-lg font-mono font-bold text-[var(--text-main)]">{selectedBuilding.properties.height}m</p>
+                    <p className="text-lg font-mono font-bold text-[var(--text-main)] uppercase">
+                      {selectedBuilding.properties.type ? t[selectedBuilding.properties.type] : `${selectedBuilding.properties.height}m`}
+                    </p>
                   </div>
                   <div className="bg-surface rounded-xl p-3 sm:p-4 border border-border flex flex-col justify-between">
                     <div className="flex items-center gap-2 mb-1">
@@ -2136,6 +2604,38 @@ export default function App() {
 
                 <div className="space-y-4">
                   {/* Strategic Documentation Section */}
+                  {selectedBuilding.properties.description && (
+                    <div className="bg-base/40 rounded-xl p-4 border border-border/50 mb-4">
+                      <h3 className="text-[9px] font-display font-bold text-slate-400 uppercase tracking-[0.2em] mb-2">{t.assetDescription}</h3>
+                      <p className="text-xs text-slate-300 leading-relaxed font-sans">
+                        {selectedBuilding.properties.description}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Strategic Specifications */}
+                  {(selectedBuilding.properties.sqft || selectedBuilding.properties.yearBuilt || selectedBuilding.properties.parkingSpaces) && (
+                    <div className="grid grid-cols-3 gap-3">
+                      {selectedBuilding.properties.sqft && (
+                        <div className="bg-base/40 rounded-xl p-3 border border-border/50">
+                          <p className="text-[7px] text-slate-500 uppercase font-bold tracking-widest mb-1">Area_SQFT</p>
+                          <p className="text-xs font-mono font-bold text-slate-300">{selectedBuilding.properties.sqft.toLocaleString()}</p>
+                        </div>
+                      )}
+                      {selectedBuilding.properties.yearBuilt && (
+                        <div className="bg-base/40 rounded-xl p-3 border border-border/50">
+                          <p className="text-[7px] text-slate-500 uppercase font-bold tracking-widest mb-1">Year_Built</p>
+                          <p className="text-xs font-mono font-bold text-slate-300">{selectedBuilding.properties.yearBuilt}</p>
+                        </div>
+                      )}
+                      {selectedBuilding.properties.parkingSpaces !== undefined && (
+                        <div className="bg-base/40 rounded-xl p-3 border border-border/50">
+                          <p className="text-[7px] text-slate-500 uppercase font-bold tracking-widest mb-1">Parking_Slots</p>
+                          <p className="text-xs font-mono font-bold text-slate-300">{selectedBuilding.properties.parkingSpaces}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <div className="bg-base/40 rounded-xl p-4 border border-border/50">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-[9px] font-display font-bold text-slate-400 uppercase tracking-[0.2em]">Strategic Documentation</h3>
@@ -2144,15 +2644,16 @@ export default function App() {
                           type="file" 
                           ref={fileInputRef} 
                           className="hidden" 
-                          accept="image/*"
+                          accept="image/*,video/*"
                           onChange={handleFileUpload}
                         />
                         <button 
                           onClick={() => fileInputRef.current?.click()}
-                          className="p-1.5 bg-secondary/10 glass-hover text-secondary rounded-lg transition-colors"
+                          className="flex items-center gap-2 px-3 py-1.5 bg-secondary/10 glass-hover text-secondary rounded-lg transition-colors border border-secondary/20"
                           title={t.uploadDocumentation}
                         >
                           <Upload className="w-3.5 h-3.5" />
+                          <span className="text-[9px] font-bold uppercase tracking-widest">{t.uploadDocumentation}</span>
                         </button>
                         <button 
                           onClick={() => startCapture('photo')}
@@ -2174,7 +2675,11 @@ export default function App() {
                     {/* Media Gallery */}
                     <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
                       {buildingMedia[selectedBuilding.id]?.map(item => (
-                        <div key={item.id} className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-border group">
+                        <div 
+                          key={item.id} 
+                          onClick={() => setSelectedMedia(item)}
+                          className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-border group cursor-pointer"
+                        >
                           {item.type === 'photo' ? (
                             <img src={item.url} alt="Documentation" className="w-full h-full object-cover" />
                           ) : (
@@ -2219,15 +2724,60 @@ export default function App() {
                           >
                             <X className="w-8 h-8" />
                           </button>
-                          <button 
-                            onClick={isCapturing === 'photo' ? capturePhoto : stopCapture}
-                            className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center"
-                          >
-                            <div className="w-16 h-16 bg-white rounded-full active:scale-90 transition-transform" />
-                          </button>
+                          {isCapturing === 'photo' ? (
+                            <button 
+                              onClick={capturePhoto}
+                              className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center"
+                            >
+                              <div className="w-16 h-16 bg-white rounded-full active:scale-90 transition-transform" />
+                            </button>
+                          ) : (
+                            <button 
+                              onClick={isRecording ? stopRecording : startRecording}
+                              className={cn(
+                                "w-20 h-20 rounded-full border-4 flex items-center justify-center transition-all",
+                                isRecording ? "border-red-500" : "border-white"
+                              )}
+                            >
+                              <div className={cn(
+                                "transition-all",
+                                isRecording ? "w-8 h-8 bg-red-500 rounded-sm" : "w-16 h-16 bg-white rounded-full"
+                              )} />
+                            </button>
+                          )}
                         </div>
                         <div className="absolute top-12 text-white font-mono text-xs uppercase tracking-widest bg-black/40 px-4 py-2 rounded-full backdrop-blur-md">
                           {isCapturing === 'photo' ? 'Tactical Imaging Mode' : 'Strategic Video Uplink'}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+
+                  {/* Full-screen Media Preview */}
+                  <AnimatePresence>
+                    {selectedMedia && (
+                      <motion.div
+                        initial={{ opacity: 0 }}
+                        animate={{ opacity: 1 }}
+                        exit={{ opacity: 0 }}
+                        className="fixed inset-0 z-[110] bg-black/90 backdrop-blur-xl flex items-center justify-center p-4"
+                        onClick={() => setSelectedMedia(null)}
+                      >
+                        <div className="relative max-w-4xl w-full max-h-[80vh] flex items-center justify-center" onClick={e => e.stopPropagation()}>
+                          <button 
+                            onClick={() => setSelectedMedia(null)}
+                            className="absolute -top-12 right-0 p-2 text-white/50 hover:text-white transition-colors"
+                          >
+                            <X className="w-8 h-8" />
+                          </button>
+                          {selectedMedia.type === 'photo' ? (
+                            <img src={selectedMedia.url} alt="Strategic Documentation" className="max-w-full max-h-full object-contain rounded-xl shadow-2xl border border-white/10" />
+                          ) : (
+                            <video src={selectedMedia.url} controls autoPlay className="max-w-full max-h-full rounded-xl shadow-2xl border border-white/10" />
+                          )}
+                          <div className="absolute -bottom-12 left-0 text-white/50 font-mono text-[10px] uppercase tracking-[0.2em]">
+                            Strategic Intel // {new Date(selectedMedia.timestamp).toLocaleString()}
+                          </div>
                         </div>
                       </motion.div>
                     )}
@@ -2332,85 +2882,89 @@ export default function App() {
             </div>
 
             {/* Mobile User Info */}
-            <div className="sm:hidden apple-glass rounded-2xl p-4 border border-white/10 pointer-events-auto mb-4">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 bg-secondary/20 rounded-full flex items-center justify-center border border-secondary/30">
-                    <Wallet className="w-5 h-5 text-secondary" />
-                  </div>
-                  <div>
-                    <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.treasury}</p>
-                    <p className="text-sm font-mono font-bold text-secondary">${balance.toLocaleString()}</p>
-                  </div>
-                </div>
-                <div className="flex flex-col items-end">
-                  <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.role}</p>
-                  <p className="text-[10px] font-bold text-primary uppercase tracking-wider">{userRole}</p>
-                </div>
-              </div>
-            </div>
-            {/* System Status Card */}
-            <div className="apple-glass rounded-2xl p-5 border border-white/10 pointer-events-auto shadow-[0_0_30px_rgba(0,0,0,0.5)]">
-              <div className="flex items-center justify-between mb-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center border border-primary/30">
-                    <Activity className="w-4 h-4 text-primary" />
-                  </div>
-                  <div>
-                    <h3 className="text-[10px] font-display font-bold text-white uppercase tracking-[0.2em]">{t.systemStatus}</h3>
-                    <div className="flex items-center gap-1.5 mt-0.5">
-                      <div className="w-1 h-1 rounded-full bg-primary animate-pulse" />
-                      <span className="text-[8px] font-mono text-primary uppercase tracking-widest">{t.nominal}</span>
+            <ParallaxCard className="sm:hidden pointer-events-auto mb-4">
+              <div className="apple-glass rounded-2xl p-4 border border-white/10">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-secondary/20 rounded-full flex items-center justify-center border border-secondary/30">
+                      <Wallet className="w-5 h-5 text-secondary" />
+                    </div>
+                    <div>
+                      <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.treasury}</p>
+                      <p className="text-sm font-mono font-bold text-secondary">${balance.toLocaleString()}</p>
                     </div>
                   </div>
-                </div>
-                <div className="flex flex-col items-end">
-                  <span className="text-[7px] text-slate-500 uppercase font-bold tracking-widest">{t.threatLevel}</span>
-                  <span className="text-[9px] font-mono text-white">LOW_0.12</span>
+                  <div className="flex flex-col items-end">
+                    <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.role}</p>
+                    <p className="text-[10px] font-bold text-primary uppercase tracking-wider">{userRole}</p>
+                  </div>
                 </div>
               </div>
+            </ParallaxCard>
 
-              <div className="flex items-center gap-6 mb-6">
-                <div className="relative w-16 h-16 flex items-center justify-center">
-                  <svg className="w-full h-full -rotate-90">
-                    <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="4" className="text-white/5" />
-                    <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="4" strokeDasharray="175.9" strokeDashoffset="44" className="text-primary shadow-[0_0_10px_rgba(var(--primary-accent),0.5)]" />
-                  </svg>
-                  <div className="absolute inset-0 flex flex-col items-center justify-center">
-                    <span className="text-[10px] font-mono font-bold text-white">75%</span>
-                    <span className="text-[5px] text-slate-500 uppercase">Sync</span>
+            {/* System Status Card */}
+            <ParallaxCard className="pointer-events-auto">
+              <div className="apple-glass rounded-2xl p-5 border border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
+                <div className="flex items-center justify-between mb-6">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center border border-primary/30 pulsate-glow">
+                      <Activity className="w-4 h-4 text-primary" />
+                    </div>
+                    <div>
+                      <h3 className="text-[10px] font-display font-bold text-white uppercase tracking-[0.2em]">{t.systemStatus}</h3>
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <div className="w-1 h-1 rounded-full bg-primary pulsate-glow" />
+                        <span className="text-[8px] font-mono text-primary uppercase tracking-widest">{t.nominal}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex flex-col items-end">
+                    <span className="text-[7px] text-slate-500 uppercase font-bold tracking-widest">{t.threatLevel}</span>
+                    <span className="text-[9px] font-mono text-white">LOW_0.12</span>
                   </div>
                 </div>
-                <div className="flex-1 space-y-3">
-                  <div className="flex items-center justify-between p-2 rounded-lg bg-white/5 border border-white/5">
-                    <div className="flex items-center gap-2">
-                      <Cpu className="w-2.5 h-2.5 text-slate-500" />
-                      <span className="text-[7px] text-slate-400 uppercase font-bold tracking-widest">{t.activeNodes}</span>
+
+                <div className="flex items-center gap-6 mb-6">
+                  <div className="relative w-16 h-16 flex items-center justify-center">
+                    <svg className="w-full h-full -rotate-90">
+                      <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="4" className="text-white/5" />
+                      <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="4" strokeDasharray="175.9" strokeDashoffset="44" className="text-primary shadow-[0_0_10px_rgba(var(--primary-accent),0.5)]" />
+                    </svg>
+                    <div className="absolute inset-0 flex flex-col items-center justify-center">
+                      <span className="text-[10px] font-mono font-bold text-white">75%</span>
+                      <span className="text-[5px] text-slate-500 uppercase">Sync</span>
                     </div>
-                    <span className="text-[8px] font-mono text-white">12,402</span>
                   </div>
-                  <div className="space-y-1.5">
-                    <div className="flex justify-between items-center">
-                      <span className="text-[6px] text-slate-500 uppercase font-bold tracking-widest">Network_Load</span>
-                      <span className="text-[7px] font-mono text-primary">24%</span>
+                  <div className="flex-1 space-y-3">
+                    <div className="flex items-center justify-between p-2 rounded-lg bg-white/5 border border-white/5">
+                      <div className="flex items-center gap-2">
+                        <Cpu className="w-2.5 h-2.5 text-slate-500" />
+                        <span className="text-[7px] text-slate-400 uppercase font-bold tracking-widest">{t.activeNodes}</span>
+                      </div>
+                      <span className="text-[8px] font-mono text-white">12,402</span>
                     </div>
-                    <div className="h-0.5 bg-white/5 rounded-full overflow-hidden">
-                      <motion.div 
-                        initial={{ width: 0 }}
-                        animate={{ width: '24%' }}
-                        className="h-full bg-primary shadow-[0_0_10px_rgba(var(--primary-accent),0.5)]"
-                      />
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[6px] text-slate-500 uppercase font-bold tracking-widest">Network_Load</span>
+                        <span className="text-[7px] font-mono text-primary">24%</span>
+                      </div>
+                      <div className="h-0.5 bg-white/5 rounded-full overflow-hidden">
+                        <motion.div 
+                          initial={{ width: 0 }}
+                          animate={{ width: '24%' }}
+                          className="h-full bg-primary shadow-[0_0_10px_rgba(var(--primary-accent),0.5)]"
+                        />
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
-            </div>
+            </ParallaxCard>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {/* Dashboard Toggle */}
-      <div className="absolute left-4 top-4 z-50 pointer-events-auto">
+      <div className="absolute left-4 top-4 z-50 pointer-events-auto flex flex-col gap-2">
         <button 
           onClick={() => setDashboardOpen(!dashboardOpen)}
           className={cn(
@@ -2420,6 +2974,18 @@ export default function App() {
         >
           {dashboardOpen ? <ChevronUp className="-rotate-90 w-5 h-5" /> : <ChevronUp className="rotate-90 w-5 h-5" />}
         </button>
+        {user && (
+          <button 
+            onClick={() => {
+              setNewAsset(prev => ({ ...prev, latitude: viewState.latitude, longitude: viewState.longitude }));
+              setCreateModalOpen(true);
+            }}
+            className="w-10 h-10 bg-primary/20 hover:bg-primary/30 border border-primary/30 rounded-xl flex items-center justify-center text-primary transition-all shadow-xl"
+            title={t.createAsset}
+          >
+            <Plus className="w-5 h-5" />
+          </button>
+        )}
       </div>
 
       {/* Map Legend */}
@@ -2475,6 +3041,206 @@ export default function App() {
               </div>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Create Asset Modal */}
+      <AnimatePresence>
+        {createModalOpen && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setCreateModalOpen(false)}
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg apple-glass rounded-3xl border border-white/10 shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-6 border-b border-white/10 flex items-center justify-between bg-primary/5">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-primary/20 rounded-xl flex items-center justify-center border border-primary/30">
+                    <Plus className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-display font-bold text-white uppercase tracking-wider">{t.createAsset}</h2>
+                    <p className="text-[10px] font-mono text-primary uppercase tracking-widest">{t.restricted}</p>
+                  </div>
+                </div>
+                <button onClick={() => setCreateModalOpen(false)} className="p-2 hover:bg-white/5 rounded-lg transition-colors">
+                  <X className="w-5 h-5 text-slate-500" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-hide">
+                {createError && (
+                  <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 flex items-start gap-3">
+                    <AlertTriangle className="w-5 h-5 text-red-500 shrink-0 mt-0.5" />
+                    <div className="flex-1">
+                      <p className="text-xs text-red-400 font-medium">{createError}</p>
+                    </div>
+                    <button onClick={() => setCreateError(null)}>
+                      <X className="w-4 h-4 text-red-500/50 hover:text-red-500" />
+                    </button>
+                  </div>
+                )}
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetTitle}</label>
+                    <input 
+                      type="text"
+                      value={newAsset.title}
+                      onChange={(e) => setNewAsset(prev => ({ ...prev, title: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                      placeholder="Strategic Node Alpha..."
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetType}</label>
+                      <select 
+                        value={newAsset.type}
+                        onChange={(e) => setNewAsset(prev => ({ ...prev, type: e.target.value }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors appearance-none"
+                      >
+                        <option value="retail">{t.retail}</option>
+                        <option value="office">{t.office}</option>
+                        <option value="warehouse">{t.warehouse}</option>
+                        <option value="residential">{t.residential}</option>
+                      </select>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetCost}</label>
+                      <input 
+                        type="number"
+                        value={newAsset.cost}
+                        onChange={(e) => setNewAsset(prev => ({ ...prev, cost: parseFloat(e.target.value) }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetYield}</label>
+                      <input 
+                        type="number"
+                        value={newAsset.yield}
+                        onChange={(e) => setNewAsset(prev => ({ ...prev, yield: parseFloat(e.target.value) }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">ROI %</label>
+                      <div className="w-full bg-slate-900/50 border border-slate-800/50 rounded-xl p-3 text-sm text-primary font-mono">
+                        {newAsset.cost > 0 ? ((newAsset.yield * 12 / newAsset.cost) * 100).toFixed(2) : '0.00'}%
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetAddress}</label>
+                    <input 
+                      type="text"
+                      value={newAsset.address}
+                      onChange={(e) => setNewAsset(prev => ({ ...prev, address: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-3 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">SQFT</label>
+                      <input 
+                        type="number"
+                        value={newAsset.sqft}
+                        onChange={(e) => setNewAsset(prev => ({ ...prev, sqft: parseFloat(e.target.value) }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                        placeholder="2500"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Year Built</label>
+                      <input 
+                        type="number"
+                        value={newAsset.yearBuilt}
+                        onChange={(e) => setNewAsset(prev => ({ ...prev, yearBuilt: parseInt(e.target.value) }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                        placeholder="2024"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Parking</label>
+                      <input 
+                        type="number"
+                        value={newAsset.parkingSpaces}
+                        onChange={(e) => setNewAsset(prev => ({ ...prev, parkingSpaces: parseInt(e.target.value) }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                        placeholder="12"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetLat}</label>
+                      <input 
+                        type="number"
+                        step="0.000001"
+                        value={newAsset.latitude}
+                        onChange={(e) => setNewAsset(prev => ({ ...prev, latitude: parseFloat(e.target.value) }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetLon}</label>
+                      <input 
+                        type="number"
+                        step="0.000001"
+                        value={newAsset.longitude}
+                        onChange={(e) => setNewAsset(prev => ({ ...prev, longitude: parseFloat(e.target.value) }))}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-2">
+                    <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetDescription}</label>
+                    <textarea 
+                      value={newAsset.description}
+                      onChange={(e) => setNewAsset(prev => ({ ...prev, description: e.target.value }))}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors h-24 resize-none"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-white/10 bg-black/20">
+                <button 
+                  onClick={handleCreateAsset}
+                  disabled={isCreating || !newAsset.title || !newAsset.cost}
+                  className="w-full bg-primary hover:bg-primary/80 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition-all active:scale-95 text-sm uppercase tracking-[0.2em] shadow-[0_0_20px_rgba(var(--primary-accent),0.4)] flex items-center justify-center gap-3"
+                >
+                  {isCreating ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                      {t.assetCreating}
+                    </>
+                  ) : (
+                    <>
+                      <Target className="w-5 h-5" />
+                      {t.createAsset}
+                    </>
+                  )}
+                </button>
+              </div>
+            </motion.div>
+          </div>
         )}
       </AnimatePresence>
 

@@ -14,6 +14,25 @@
 //   - portfolio: list (optional, list of numbers) - Acquired asset IDs
 //   - createdAt: string (optional, date-time format) - Creation timestamp
 //
+// Collection: assets
+// Document ID: {assetId} (Auto-generated)
+// Fields:
+//   - title: string (required) - Asset name
+//   - address: string (optional) - Physical address
+//   - latitude: number (required) - Map latitude
+//   - longitude: number (required) - Map longitude
+//   - cost: number (required) - Acquisition cost
+//   - yield: number (optional) - Monthly income
+//   - roi: number (optional) - ROI %
+//   - status: int (optional, 0:stable, 1:risk, 2:anomalous)
+//   - type: string (optional, enum: retail, office, warehouse, residential)
+//   - ownerUid: string (required) - Creator UID
+//   - sqft: number (optional) - Total square footage
+//   - yearBuilt: number (optional) - Completion year
+//   - parkingSpaces: number (optional) - Parking capacity
+//   - description: string (optional) - Briefing
+//   - createdAt: timestamp (optional)
+//
 // ===============================================================
 
 rules_version = '2';
@@ -60,6 +79,27 @@ service cloud.firestore {
              (!('portfolio' in data) || data.portfolio is list);
     }
 
+    function isAssetOwner(ownerUid) {
+      return isAuthenticated() && request.auth.uid == ownerUid;
+    }
+
+    function isValidAsset(data) {
+      return data.keys().hasAll(['title', 'latitude', 'longitude', 'cost', 'ownerUid']) &&
+             data.title is string && data.title.size() > 0 && data.title.size() < 200 &&
+             data.latitude is number && data.longitude is number &&
+             data.cost is number && data.cost >= 0 &&
+             data.ownerUid == request.auth.uid &&
+             (!('address' in data) || (data.address is string && data.address.size() < 300)) &&
+             (!('yield' in data) || data.yield is number) &&
+             (!('roi' in data) || data.roi is number) &&
+             (!('status' in data) || (data.status is int && data.status in [0, 1, 2])) &&
+             (!('type' in data) || (data.type is string && data.type in ['retail', 'office', 'warehouse', 'residential'])) &&
+             (!('sqft' in data) || (data.sqft is number && data.sqft >= 0)) &&
+             (!('yearBuilt' in data) || (data.yearBuilt is number && data.yearBuilt > 1800 && data.yearBuilt < 2100)) &&
+             (!('parkingSpaces' in data) || (data.parkingSpaces is number && data.parkingSpaces >= 0)) &&
+             (!('description' in data) || (data.description is string && data.description.size() < 2000));
+    }
+
     // ===============================================================
     // Rules
     // ===============================================================
@@ -79,6 +119,13 @@ service cloud.firestore {
                       (isOwner(userId) && (request.resource.data.role == resource.data.role || isAdmin()));
       
       allow delete: if isAdmin();
+    }
+
+    match /assets/{assetId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidAsset(request.resource.data);
+      allow update: if isAuthenticated() && (isAssetOwner(resource.data.ownerUid) || isAdmin()) && isValidAsset(request.resource.data);
+      allow delete: if isAdmin() || isAssetOwner(resource.data.ownerUid);
     }
 
     // Default deny
