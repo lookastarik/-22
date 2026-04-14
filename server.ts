@@ -98,6 +98,26 @@ async function startServer() {
       timestamp INTEGER,
       FOREIGN KEY(building_id) REFERENCES buildings(id)
     );
+
+    CREATE TABLE IF NOT EXISTS assets (
+      id TEXT PRIMARY KEY,
+      title TEXT,
+      type TEXT,
+      model TEXT,
+      cost REAL,
+      yield REAL,
+      roi REAL,
+      status INTEGER,
+      ownerUid TEXT,
+      description TEXT,
+      address TEXT,
+      latitude REAL,
+      longitude REAL,
+      sqft REAL,
+      yearBuilt INTEGER,
+      parkingSpaces INTEGER,
+      createdAt TEXT
+    );
   `);
 
   // Seed buildings if empty
@@ -120,7 +140,96 @@ async function startServer() {
 
   app.use(express.json());
 
-  // User API Routes (SQLite)
+  // Asset API Routes
+  app.get("/api/assets", async (req, res) => {
+    try {
+      const assets = await db.all("SELECT * FROM assets ORDER BY createdAt DESC");
+      res.json(assets);
+    } catch (error) {
+      res.status(500).json({ error: "Database error" });
+    }
+  });
+
+  app.post("/api/assets", async (req, res) => {
+    const asset = req.body;
+    
+    // Validation
+    if (!asset.title || asset.title.trim().length < 1) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+    if (!asset.cost || isNaN(Number(asset.cost)) || Number(asset.cost) <= 0) {
+      return res.status(400).json({ error: "Valid cost is required" });
+    }
+    if (!asset.latitude || !asset.longitude) {
+      return res.status(400).json({ error: "Location coordinates are required" });
+    }
+    if (!asset.ownerUid) {
+      return res.status(401).json({ error: "Unauthorized: Owner UID missing" });
+    }
+
+    const id = Math.random().toString(36).substr(2, 9);
+    const createdAt = new Date().toISOString();
+    
+    try {
+      // Correct Logic: Check and deduct balance
+      const user = await db.get("SELECT balance FROM users WHERE uid = ?", [asset.ownerUid]);
+      if (!user) {
+        return res.status(404).json({ error: "User profile not found. Please sign in again." });
+      }
+      
+      const cost = Number(asset.cost);
+      if (user.balance < cost) {
+        return res.status(400).json({ error: `Insufficient funds. Required: $${cost.toLocaleString()}, Available: $${user.balance.toLocaleString()}` });
+      }
+
+      // Deduct balance
+      const newBalance = user.balance - cost;
+      await db.run("UPDATE users SET balance = ? WHERE uid = ?", [newBalance, asset.ownerUid]);
+
+      await db.run(`
+        INSERT INTO assets (
+          id, title, type, model, cost, yield, roi, status, ownerUid, 
+          description, address, latitude, longitude, sqft, yearBuilt, 
+          parkingSpaces, createdAt
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [
+        id, asset.title, asset.type, asset.model, asset.cost, asset.yield, 
+        asset.roi, asset.status, asset.ownerUid, asset.description, 
+        asset.address, asset.latitude, asset.longitude, asset.sqft, 
+        asset.yearBuilt, asset.parkingSpaces, createdAt
+      ]);
+      
+      const newAsset = await db.get("SELECT * FROM assets WHERE id = ?", [id]);
+      res.json({ asset: newAsset, balance: newBalance });
+    } catch (error) {
+      console.error("Asset creation error:", error);
+      res.status(500).json({ error: "Database error" });
+    }
+  });
+
+  // Local Auth API
+  app.post("/api/auth/login", async (req, res) => {
+    const { email, displayName, photoURL, uid } = req.body;
+    try {
+      // Simple mock auth: if user exists, return it, else create
+      let user = await db.get("SELECT * FROM users WHERE uid = ?", [uid]);
+      if (!user) {
+        let role = 'investor';
+        if (email === "lookastarik@gmail.com") role = 'admin';
+        
+        await db.run(`
+          INSERT INTO users (uid, email, displayName, photoURL, role, balance, portfolio, createdAt)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        `, [uid, email, displayName, photoURL, role, 5000000, '[]', new Date().toISOString()]);
+        
+        user = await db.get("SELECT * FROM users WHERE uid = ?", [uid]);
+      }
+      user.portfolio = JSON.parse(user.portfolio);
+      res.json(user);
+    } catch (error) {
+      res.status(500).json({ error: "Auth error" });
+    }
+  });
   // ... (existing user routes)
   app.get("/api/user/:uid", async (req, res) => {
     try {

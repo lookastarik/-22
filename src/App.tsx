@@ -1,27 +1,15 @@
 import * as React from 'react';
-import { useState, useMemo, useEffect, useCallback, Component, ErrorInfo, ReactNode } from 'react';
-import { Map, useControl, Layer, MapRef, Marker } from 'react-map-gl/maplibre';
+import { useState, useMemo, useEffect, useCallback, useRef, Component, ErrorInfo, ReactNode } from 'react';
+import { Map, useControl, Layer, MapRef, Marker, Source } from 'react-map-gl/maplibre';
 import { MapboxOverlay, MapboxOverlayProps } from '@deck.gl/mapbox';
+import { LightingEffect, AmbientLight, _SunLight as SunLight } from '@deck.gl/core';
 import { createBuildingsLayer } from './layers/buildings';
+import { createTrafficLayer, processRoadsToTrips } from './layers/traffic';
+import { ThreeProjectLayer, ProjectModel } from './layers/threeLayer';
 import { GoogleGenAI, Type } from "@google/genai";
-import { auth, db } from './firebase';
-import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut,
-  User as FirebaseUser
-} from 'firebase/auth';
-import { 
-  collection, 
-  addDoc, 
-  onSnapshot, 
-  query, 
-  orderBy, 
-  serverTimestamp,
-  doc,
-  getDocFromServer
-} from 'firebase/firestore';
+import { soundService } from './services/soundService';
+import { PathLayer } from '@deck.gl/layers';
+// Firebase removed - using local SQLite via API
 import { 
   Building2, 
   Shield, 
@@ -71,10 +59,36 @@ import {
   Zap,
   Radio,
   Target,
-  AlertTriangle
+  AlertTriangle,
+  PieChart as PieChartIcon,
+  BarChart3,
+  LayoutDashboard,
+  Grid
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { cn } from './lib/utils';
+import Markdown from 'react-markdown';
+import { 
+  LineChart, 
+  Line, 
+  XAxis, 
+  YAxis, 
+  CartesianGrid, 
+  Tooltip, 
+  ResponsiveContainer, 
+  AreaChart, 
+  Area,
+  PieChart,
+  Pie,
+  Cell,
+  BarChart,
+  Bar,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  Radar as RechartsRadar
+} from 'recharts';
 
 // Types
 interface BuildingInfo {
@@ -103,7 +117,7 @@ interface BuildingInfo {
 }
 
 interface Asset {
-  id: string;
+  id: string | number;
   title: string;
   latitude: number;
   longitude: number;
@@ -112,6 +126,7 @@ interface Asset {
   roi: number;
   status: number;
   type: string;
+  model: string;
   ownerUid: string;
   address: string;
   description: string;
@@ -134,56 +149,6 @@ interface ChatMessage {
 }
 
 // Firebase Error Handling
-enum OperationType {
-  CREATE = 'create',
-  UPDATE = 'update',
-  DELETE = 'delete',
-  LIST = 'list',
-  GET = 'get',
-  WRITE = 'write',
-}
-
-interface FirestoreErrorInfo {
-  error: string;
-  operationType: OperationType;
-  path: string | null;
-  authInfo: {
-    userId: string | undefined;
-    email: string | null | undefined;
-    emailVerified: boolean | undefined;
-    isAnonymous: boolean | undefined;
-    tenantId: string | null | undefined;
-    providerInfo: {
-      providerId: string;
-      displayName: string | null;
-      email: string | null;
-      photoUrl: string | null;
-    }[];
-  }
-}
-
-function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
-  const errInfo: FirestoreErrorInfo = {
-    error: error instanceof Error ? error.message : String(error),
-    authInfo: {
-      userId: auth.currentUser?.uid,
-      email: auth.currentUser?.email,
-      emailVerified: auth.currentUser?.emailVerified,
-      isAnonymous: auth.currentUser?.isAnonymous,
-      tenantId: auth.currentUser?.tenantId,
-      providerInfo: auth.currentUser?.providerData.map(provider => ({
-        providerId: provider.providerId,
-        displayName: provider.displayName,
-        email: provider.email,
-        photoUrl: provider.photoURL
-      })) || []
-    },
-    operationType,
-    path
-  }
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
-}
-
 interface ErrorBoundaryProps {
   children: ReactNode;
 }
@@ -193,8 +158,8 @@ interface ErrorBoundaryState {
   error: Error | null;
 }
 
-class AppErrorBoundary extends (React.Component as any) {
-  constructor(props: any) {
+class AppErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
     super(props);
     this.state = { hasError: false, error: null };
   }
@@ -278,6 +243,12 @@ const translations = {
     stable_status: "Stable",
     search: "Search",
     theme: "Theme",
+    themeTactical: "Tactical",
+    themeCyber: "Cyberpunk",
+    themeRoyal: "Royal",
+    themeArctic: "Arctic",
+    themeDesert: "Desert",
+    themeProfessional: "Corporate",
     language: "Language",
     mode: "Mode",
     light: "Light",
@@ -291,6 +262,7 @@ const translations = {
     legendOptimalDesc: "Top-tier assets with ROI exceeding 20%.",
     layers: "Data Layers",
     buildings: "3D Buildings",
+    tacticalGrid: "Tactical Grid",
     weather: "Atmospheric Intel",
     toggleLayer: "Toggle Visibility",
     signIn: "Authenticate",
@@ -338,6 +310,14 @@ const translations = {
     office: "Office",
     warehouse: "Warehouse",
     residential: "Residential",
+    aiAnalysis: "AI Analysis",
+    analyzing: "Analyzing...",
+    investmentPotential: "Investment Potential",
+    aiRecommendation: "AI Recommendation",
+    uiStyle: "Interface Style",
+    tactical: "Tactical Command",
+    professional: "Professional Suite",
+    uiStyleDesc: "Switch between combat-ready and polished professional interfaces.",
   },
   ru: {
     title: "YARDSOFT",
@@ -377,6 +357,12 @@ const translations = {
     stable_status: "Стабильно",
     search: "Поиск",
     theme: "Тема",
+    themeTactical: "Тактическая",
+    themeCyber: "Киберпанк",
+    themeRoyal: "Королевская",
+    themeArctic: "Арктика",
+    themeDesert: "Пустыня",
+    themeProfessional: "Корпоративная",
     language: "Язык",
     mode: "Режим",
     light: "Светлый",
@@ -390,6 +376,7 @@ const translations = {
     legendOptimalDesc: "Активы высшего уровня с ROI более 20%.",
     layers: "Слои Данных",
     buildings: "3D Здания",
+    tacticalGrid: "Тактическая Сетка",
     weather: "Атмосферные Данные",
     toggleLayer: "Переключить Видимость",
     signIn: "Аутентификация",
@@ -437,10 +424,66 @@ const translations = {
     office: "Офис",
     warehouse: "Склад",
     residential: "Жилое",
+    aiAnalysis: "ИИ-Анализ",
+    analyzing: "Анализ...",
+    investmentPotential: "Инвестиционный Потенциал",
+    aiRecommendation: "Рекомендация ИИ",
+    uiStyle: "Стиль Интерфейса",
+    tactical: "Тактический Штаб",
+    professional: "Профессиональный Инструмент",
+    uiStyleDesc: "Переключение между боевым и строгим профессиональным интерфейсом.",
   }
 };
 
-const themes = ['tactical', 'cyber', 'royal', 'arctic', 'desert'];
+const themes = ['tactical', 'cyber', 'royal', 'arctic', 'desert', 'professional'];
+
+const strategicProjects: ProjectModel[] = [
+  {
+    id: 'vostok-tower',
+    name: 'Башня "Восток"',
+    url: '/assets/models/project_vostok.glb',
+    coordinates: [37.537, 55.749],
+    altitude: 0,
+    rotation: 0,
+    scale: 1,
+    details: {
+      cost: '12.5 млрд ₽',
+      roi: '18.4%',
+      status: 'Активная фаза',
+      description: 'Многофункциональный комплекс класса A+. Стратегический объект инвестиций в центре делового квартала.'
+    }
+  },
+  {
+    id: 'nord-hub',
+    name: 'Логистический Хаб "Север"',
+    url: '/assets/models/nord_hub.glb',
+    coordinates: [37.450, 55.900],
+    altitude: 0,
+    rotation: Math.PI / 4,
+    scale: 1.2,
+    details: {
+      cost: '4.2 млрд ₽',
+      roi: '12.1%',
+      status: 'Проектирование',
+      description: 'Крупнейший транспортный узел северного направления. Оптимизация логистических цепочек.'
+    }
+  },
+  {
+    id: 'eco-residence',
+    name: 'Эко-Резиденция "Зеленый Квартал"',
+    url: '/assets/models/eco_residence.glb',
+    coordinates: [37.650, 55.700],
+    altitude: 0,
+    rotation: -Math.PI / 6,
+    scale: 0.8,
+    details: {
+      cost: '8.7 млрд ₽',
+      roi: '15.2%',
+      status: 'Строительство',
+      description: 'Жилой комплекс нового поколения с упором на экологичность и автономность.'
+    }
+  }
+];
 
 function DeckGLOverlay(props: MapboxOverlayProps) {
   const overlay = useControl<MapboxOverlay>(() => new MapboxOverlay(props));
@@ -495,6 +538,254 @@ const ParallaxCard = ({ children, className }: { children: React.ReactNode, clas
         {children}
       </div>
     </motion.div>
+  );
+};
+
+const InvestorCabinet = ({ 
+  isOpen, 
+  onClose, 
+  balance, 
+  portfolioValue, 
+  totalYield, 
+  portfolio, 
+  history,
+  t 
+}: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  balance: number, 
+  portfolioValue: number, 
+  totalYield: number, 
+  portfolio: any[], 
+  history: any[],
+  t: any 
+}) => {
+  const avgRoi = portfolio.length > 0 
+    ? portfolio.reduce((acc, curr) => acc + (curr.roi || 0), 0) / portfolio.length 
+    : 0;
+
+  const assetDistribution = useMemo(() => {
+    const counts: Record<string, number> = {};
+    portfolio.forEach(p => {
+      counts[p.type || 'Other'] = (counts[p.type || 'Other'] || 0) + 1;
+    });
+    return Object.entries(counts).map(([name, value]) => ({ name, value }));
+  }, [portfolio]);
+
+  const COLORS = ['#ffffff', '#a1a1aa', '#3b82f6', '#10b981', '#f59e0b'];
+
+  return (
+    <AnimatePresence>
+      {isOpen && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.95 }}
+          animate={{ opacity: 1, scale: 1 }}
+          exit={{ opacity: 0, scale: 0.95 }}
+          className="fixed inset-0 z-[120] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-hidden"
+        >
+          <div className="w-full max-w-6xl h-full flex flex-col gap-6">
+            {/* Header */}
+            <div className="flex justify-between items-center">
+              <div>
+                <h2 className="text-3xl font-display font-bold text-white tracking-tighter uppercase">Investor_Cabinet</h2>
+                <p className="text-xs font-mono text-primary/60 tracking-[0.3em] mt-1">Strategic Portfolio Analysis // Session_Active</p>
+              </div>
+              <button 
+                onClick={onClose}
+                className="p-3 bg-white/5 hover:bg-white/10 rounded-full border border-white/10 transition-colors"
+              >
+                <X className="w-6 h-6 text-white" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto pr-2 scrollbar-hide space-y-6">
+              {/* Top Metrics Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  { label: 'Total Capital', value: `$${(balance + portfolioValue).toLocaleString()}`, icon: Wallet, color: 'text-white' },
+                  { label: 'Portfolio Value', value: `$${portfolioValue.toLocaleString()}`, icon: Building2, color: 'text-primary' },
+                  { label: 'Est. Monthly Yield', value: `$${(totalYield * 12).toLocaleString()}`, icon: TrendingUp, color: 'text-secondary' },
+                  { label: 'Average ROI', value: `${avgRoi.toFixed(1)}%`, icon: Activity, color: 'text-emerald-400' }
+                ].map((m, i) => (
+                  <motion.div 
+                    key={i}
+                    initial={{ opacity: 0, y: 20 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: i * 0.1 }}
+                    className="bg-white/5 border border-white/10 rounded-2xl p-6 relative overflow-hidden group"
+                  >
+                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
+                      <m.icon className="w-12 h-12" />
+                    </div>
+                    <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-2">{m.label}</p>
+                    <p className={cn("text-2xl font-display font-bold", m.color)}>{m.value}</p>
+                    <div className="mt-4 h-1 w-full bg-white/5 rounded-full overflow-hidden">
+                      <motion.div 
+                        initial={{ width: 0 }}
+                        animate={{ width: '70%' }}
+                        className={cn("h-full", m.color.replace('text-', 'bg-'))}
+                      />
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+
+              {/* Charts Grid */}
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Performance Chart */}
+                <div className="lg:col-span-2 bg-white/5 border border-white/10 rounded-2xl p-6">
+                  <div className="flex justify-between items-center mb-6">
+                    <h3 className="text-xs font-mono text-white uppercase tracking-widest flex items-center gap-2">
+                      <TrendingUp className="w-4 h-4 text-primary" />
+                      Portfolio_Performance
+                    </h3>
+                    <div className="flex gap-2">
+                      <span className="px-2 py-1 bg-primary/20 text-primary text-[8px] font-bold rounded uppercase">Real-time</span>
+                    </div>
+                  </div>
+                  <div className="h-[300px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <AreaChart data={history}>
+                        <defs>
+                          <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="var(--primary-accent)" stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor="var(--primary-accent)" stopOpacity={0}/>
+                          </linearGradient>
+                        </defs>
+                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                        <XAxis 
+                          dataKey="time" 
+                          stroke="rgba(255,255,255,0.3)" 
+                          fontSize={8} 
+                          tickLine={false} 
+                          axisLine={false}
+                        />
+                        <YAxis 
+                          stroke="rgba(255,255,255,0.3)" 
+                          fontSize={8} 
+                          tickLine={false} 
+                          axisLine={false}
+                          tickFormatter={(value) => `$${value}`}
+                        />
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
+                          itemStyle={{ color: '#fff' }}
+                        />
+                        <Area 
+                          type="monotone" 
+                          dataKey="value" 
+                          stroke="var(--primary-accent)" 
+                          fillOpacity={1} 
+                          fill="url(#colorValue)" 
+                          strokeWidth={2}
+                        />
+                      </AreaChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+
+                {/* Asset Allocation */}
+                <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+                  <h3 className="text-xs font-mono text-white uppercase tracking-widest mb-6 flex items-center gap-2">
+                    <PieChartIcon className="w-4 h-4 text-secondary" />
+                    Asset_Allocation
+                  </h3>
+                  <div className="h-[250px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={assetDistribution.length > 0 ? assetDistribution : [{ name: 'None', value: 1 }]}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={60}
+                          outerRadius={80}
+                          paddingAngle={5}
+                          dataKey="value"
+                        >
+                          {assetDistribution.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  </div>
+                  <div className="mt-4 space-y-2">
+                    {assetDistribution.map((entry, index) => (
+                      <div key={index} className="flex justify-between items-center">
+                        <div className="flex items-center gap-2">
+                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
+                          <span className="text-[10px] text-slate-400 uppercase tracking-wider">{entry.name}</span>
+                        </div>
+                        <span className="text-[10px] font-mono text-white">{entry.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom Section: Assets List */}
+              <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
+                <h3 className="text-xs font-mono text-white uppercase tracking-widest mb-6 flex items-center gap-2">
+                  <Layers className="w-4 h-4 text-emerald-400" />
+                  Secured_Assets_Inventory
+                </h3>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left">
+                    <thead>
+                      <tr className="border-b border-white/5">
+                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Asset_ID</th>
+                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Type</th>
+                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Valuation</th>
+                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Yield</th>
+                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">ROI</th>
+                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Status</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {portfolio.map((asset, i) => (
+                        <tr key={i} className="group hover:bg-white/5 transition-colors">
+                          <td className="py-4">
+                            <div className="flex flex-col">
+                              <span className="text-[10px] font-bold text-white flex items-center gap-2">
+                                {asset.title || `Asset_${asset.id}`}
+                                <span className="px-1.5 py-0.5 bg-secondary/10 border border-secondary/30 rounded text-[7px] text-secondary pulsate-glow-secondary">ID: {asset.id}</span>
+                              </span>
+                              <span className="text-[8px] font-mono text-slate-500 uppercase">{asset.address?.substring(0, 20)}...</span>
+                            </div>
+                          </td>
+                          <td className="py-4">
+                            <span className="text-[9px] px-2 py-0.5 bg-white/5 border border-white/10 rounded text-slate-400 uppercase">{asset.type || 'Standard'}</span>
+                          </td>
+                          <td className="py-4 text-[10px] font-mono text-white">${asset.cost?.toLocaleString()}</td>
+                          <td className="py-4 text-[10px] font-mono text-secondary">+${asset.yield?.toLocaleString()}/mo</td>
+                          <td className="py-4 text-[10px] font-mono text-emerald-400">{asset.roi}%</td>
+                          <td className="py-4">
+                            <div className="flex items-center gap-1.5">
+                              <div className="w-1 h-1 rounded-full bg-emerald-400 pulsate-glow" />
+                              <span className="text-[8px] font-mono text-emerald-400 uppercase">Active</span>
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                      {portfolio.length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="py-12 text-center text-slate-500 font-mono text-xs uppercase tracking-widest">
+                            No strategic assets secured in current session.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+    </AnimatePresence>
   );
 };
 
@@ -628,11 +919,11 @@ export default function App() {
   
   const [hoverInfo, setHoverInfo] = useState<BuildingInfo | null>(null);
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingInfo | null>(null);
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<any>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [userRole, setUserRole] = useState<'anonymous' | 'investor' | 'admin'>('anonymous');
   const [balance, setBalance] = useState(5000000);
-  const [portfolio, setPortfolio] = useState<number[]>([]);
+  const [portfolio, setPortfolio] = useState<(number | string)[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -649,24 +940,118 @@ export default function App() {
   const [language, setLanguage] = useState<'en' | 'ru'>('en');
   const [colorScheme, setColorScheme] = useState('tactical');
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
+  const [uiStyle, setUiStyle] = useState<'tactical' | 'professional'>('tactical');
   const [showLogo, setShowLogo] = useState(true);
+  
+  // Hide logo splash after delay
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowLogo(false);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchMarker, setSearchMarker] = useState<{ lat: number, lon: number, name: string } | null>(null);
   const [pulse, setPulse] = useState(0);
-  // Firebase Auth Listener
+  const [showTraffic, setShowTraffic] = useState(true);
+  const [trafficTime, setTrafficTime] = useState(0);
+  const [roadsData, setRoadsData] = useState<any[]>([]);
+  const [isTrafficLoading, setIsTrafficLoading] = useState(false);
+
+  // Local Auth Simulation
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
+    const savedUser = localStorage.getItem('tactical_user');
+    if (savedUser) {
+      const parsedUser = JSON.parse(savedUser);
+      fetch(`/api/user/${parsedUser.uid}`)
+        .then(res => res.json())
+        .then(data => {
+          if (!data.error) {
+            setUser(data);
+            setUserRole(data.role);
+            setBalance(data.balance);
+            setPortfolio(data.portfolio || []);
+          } else {
+            localStorage.removeItem('tactical_user');
+          }
+          setIsAuthReady(true);
+        })
+        .catch(() => setIsAuthReady(true));
+    } else {
       setIsAuthReady(true);
-      if (!firebaseUser) {
-        setUserRole('anonymous');
-        setPortfolio([]);
-        setBalance(5000000);
+    }
+  }, []);
+
+  useEffect(() => {
+    setAiAnalysis(null);
+  }, [selectedBuilding]);
+
+  const prevSelectedId = useRef<string | number | null>(null);
+
+  // Smooth FlyTo when building is selected
+  useEffect(() => {
+    if (selectedBuilding && mapRef.current) {
+      if (selectedBuilding.id === prevSelectedId.current) return;
+      prevSelectedId.current = selectedBuilding.id;
+
+      const coords = selectedBuilding.geometry.coordinates;
+      // If it's a polygon, get the first coordinate of the first ring
+      const [lng, lat] = selectedBuilding.geometry.type === 'Polygon' 
+        ? coords[0][0] 
+        : coords;
+
+      mapRef.current.flyTo({
+        center: [lng, lat],
+        zoom: 17,
+        pitch: 60,
+        bearing: -20,
+        duration: 2000,
+        essential: true
+      });
+    }
+  }, [selectedBuilding]);
+
+  // Tactical Grid Lines Memo
+  const gridLines = useMemo(() => {
+    const lines = [];
+    const step = 0.002; 
+    const range = 0.5; 
+    const baseLat = 51.5;
+    const baseLon = -0.1;
+
+    for (let lat = baseLat - range; lat <= baseLat + range; lat += step) {
+      lines.push({ path: [[baseLon - range, lat], [baseLon + range, lat]] });
+    }
+    for (let lon = baseLon - range; lon <= baseLon + range; lon += step) {
+      lines.push({ path: [[lon, baseLat - range], [lon, baseLat + range]] });
+    }
+    return lines;
+  }, []);
+
+  // Data Only Mode Key Listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key.toLowerCase() === 'd' && !isTyping) {
+        setDataOnlyMode(prev => !prev);
+        soundService.playClick();
       }
-    });
-    return () => unsubscribe();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isTyping]);
+
+  // Sound on Hover
+  useEffect(() => {
+    if (hoverInfo) {
+      soundService.playClick();
+    }
+  }, [hoverInfo?.id]);
+
+  // Sound on Load
+  const handleMapLoad = useCallback(() => {
+    soundService.playSonar();
   }, []);
 
   // Sync User Profile from SQLite API
@@ -714,21 +1099,36 @@ export default function App() {
   }, [user, isAuthReady]);
 
   const handleLogin = async () => {
+    // Mock login for demonstration - in real app would use OAuth or local creds
+    const mockUser = {
+      uid: 'user_' + Math.random().toString(36).substr(2, 9),
+      email: 'lookastarik@gmail.com',
+      displayName: 'Luka Starik',
+      photoURL: 'https://api.dicebear.com/7.x/avataaars/svg?seed=Luka'
+    };
+    
     try {
-      const provider = new GoogleAuthProvider();
-      await signInWithPopup(auth, provider);
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mockUser)
+      });
+      const data = await res.json();
+      setUser(data);
+      setUserRole(data.role);
+      setBalance(data.balance);
+      setPortfolio(data.portfolio || []);
+      localStorage.setItem('tactical_user', JSON.stringify(data));
     } catch (error) {
       console.error("Login failed:", error);
     }
   };
 
-  const handleLogout = async () => {
-    try {
-      await signOut(auth);
-      setProfileOpen(false);
-    } catch (error) {
-      console.error("Logout failed:", error);
-    }
+  const handleLogout = () => {
+    setUser(null);
+    setUserRole('anonymous');
+    localStorage.removeItem('tactical_user');
+    setProfileOpen(false);
   };
   const [buildingMedia, setBuildingMedia] = useState<Record<number, MediaItem[]>>({});
 
@@ -760,7 +1160,163 @@ export default function App() {
   const [gridBrightness, setGridBrightness] = useState(0.1);
   const [scanlineIntensity, setScanlineIntensity] = useState(0.3);
   const [buildingScanlineIntensity, setBuildingScanlineIntensity] = useState(0.2);
+
+  // Traffic Animation Loop
+  useEffect(() => {
+    let animationFrame: number;
+    const animate = () => {
+      setTrafficTime(prev => prev + 1);
+      animationFrame = requestAnimationFrame(animate);
+    };
+    if (showTraffic) {
+      animationFrame = requestAnimationFrame(animate);
+    }
+    return () => cancelAnimationFrame(animationFrame);
+  }, [showTraffic]);
+
+  // Fetch Roads for Traffic Simulation
+  useEffect(() => {
+    const fetchRoads = async () => {
+      setIsTrafficLoading(true);
+      const bbox = `${viewState.latitude - 0.01},${viewState.longitude - 0.02},${viewState.latitude + 0.01},${viewState.longitude + 0.02}`;
+      const query = `[out:json][timeout:25];way["highway"~"primary|secondary|tertiary|residential"](${bbox});out geom;`;
+      const endpoints = [
+        `https://overpass-api.de/api/interpreter?data=${encodeURIComponent(query)}`,
+        `https://overpass.kumi.systems/api/interpreter?data=${encodeURIComponent(query)}`,
+        `https://overpass.osm.ch/api/interpreter?data=${encodeURIComponent(query)}`
+      ];
+
+      for (const url of endpoints) {
+        try {
+          const response = await fetch(url);
+          
+          if (!response.ok) continue;
+
+          const contentType = response.headers.get("content-type");
+          if (!contentType || !contentType.includes("application/json")) continue;
+
+          const data = await response.json();
+          
+          if (data && data.elements) {
+            const features = data.elements.map((el: any) => ({
+              type: 'Feature',
+              geometry: {
+                type: 'LineString',
+                coordinates: el.geometry.map((g: any) => [g.lon, g.lat])
+              },
+              properties: el.tags
+            }));
+            
+            const trips = processRoadsToTrips(features);
+            setRoadsData(trips);
+            setIsTrafficLoading(false);
+            return; // Success!
+          }
+        } catch (error) {
+          console.warn(`Failed to fetch roads from ${url}:`, error);
+        }
+      }
+      
+      console.error("All Overpass API mirrors failed.");
+      setIsTrafficLoading(false);
+    };
+
+    fetchRoads();
+  }, []); // Only fetch once on mount for now to avoid heavy API calls
   const [mapCoords, setMapCoords] = useState({ lat: 55.7558, lon: 37.6173 });
+  const [lastInteraction, setLastInteraction] = useState(Date.now());
+  const [isAutoRotating, setIsAutoRotating] = useState(false);
+  const [hoveredProject, setHoveredProject] = useState<ProjectModel | null>(null);
+
+  const lightingEffect = useMemo(() => {
+    const ambientLight = new AmbientLight({
+      color: [255, 255, 255],
+      intensity: 1.0
+    });
+
+    const sunLight = new SunLight({
+      color: [255, 255, 255],
+      intensity: 2.0,
+      _shadow: true,
+      timestamp: 0
+    });
+
+    return new LightingEffect({ ambientLight, sunLight });
+  }, []);
+
+  // Global interaction listener
+  useEffect(() => {
+    const handleGlobalInteraction = () => {
+      setLastInteraction(Date.now());
+      setIsAutoRotating(false);
+    };
+    window.addEventListener('mousedown', handleGlobalInteraction);
+    window.addEventListener('wheel', handleGlobalInteraction, { passive: true });
+    window.addEventListener('touchstart', handleGlobalInteraction, { passive: true });
+    window.addEventListener('keydown', handleGlobalInteraction);
+    return () => {
+      window.removeEventListener('mousedown', handleGlobalInteraction);
+      window.removeEventListener('wheel', handleGlobalInteraction);
+      window.removeEventListener('touchstart', handleGlobalInteraction);
+      window.removeEventListener('keydown', handleGlobalInteraction);
+    };
+  }, []);
+
+  // Initialize Three.js Project Layer
+  useEffect(() => {
+    if (!mapRef.current) return;
+    const map = mapRef.current.getMap();
+    
+    const projectLayer = new ThreeProjectLayer(strategicProjects, (project) => {
+      setHoveredProject(project);
+    });
+
+    const addLayer = () => {
+      if (!map.getLayer(projectLayer.id)) {
+        map.addLayer(projectLayer);
+      }
+    };
+
+    if (map.isStyleLoaded()) {
+      addLayer();
+    } else {
+      map.once('idle', addLayer);
+    }
+
+    return () => {
+      if (map.getLayer(projectLayer.id)) {
+        map.removeLayer(projectLayer.id);
+      }
+    };
+  }, []);
+
+  // Auto-rotation timer
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (Date.now() - lastInteraction > 10000 && !isAutoRotating) {
+        setIsAutoRotating(true);
+      }
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [lastInteraction, isAutoRotating]);
+
+  // Rotation animation
+  useEffect(() => {
+    if (!isAutoRotating) return;
+    
+    let animationFrame: number;
+    const rotate = () => {
+      setViewState(prev => ({
+        ...prev,
+        bearing: (prev.bearing + 0.05) % 360
+      }));
+      animationFrame = requestAnimationFrame(rotate);
+    };
+    
+    animationFrame = requestAnimationFrame(rotate);
+    return () => cancelAnimationFrame(animationFrame);
+  }, [isAutoRotating]);
+
   const [userAssets, setUserAssets] = useState<Asset[]>([]);
   const [createModalOpen, setCreateModalOpen] = useState(false);
 
@@ -787,22 +1343,24 @@ export default function App() {
     }
   }, [user, isAuthReady]);
 
-  // Real-time Assets Listener
+  // Fetch Assets from SQLite API
   useEffect(() => {
     if (!isAuthReady) return;
 
-    const q = query(collection(db, "assets"), orderBy("createdAt", "desc"));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const assets: Asset[] = [];
-      snapshot.forEach((doc) => {
-        assets.push({ id: doc.id, ...doc.data() } as Asset);
-      });
-      setUserAssets(assets);
-    }, (error) => {
-      handleFirestoreError(error, OperationType.LIST, "assets");
-    });
+    const fetchAssets = async () => {
+      try {
+        const res = await fetch('/api/assets');
+        if (!res.ok) throw new Error("Failed to fetch assets");
+        const data = await res.json();
+        setUserAssets(data);
+      } catch (error) {
+        console.error("Failed to fetch assets:", error);
+      }
+    };
 
-    return () => unsubscribe();
+    fetchAssets();
+    const interval = setInterval(fetchAssets, 5000); // Poll every 5 seconds
+    return () => clearInterval(interval);
   }, [isAuthReady]);
 
   const toggleStatusFilter = (status: string) => {
@@ -818,31 +1376,44 @@ export default function App() {
     if (!buildingsData) return null;
     
     // Combine static buildings with user assets
-    const userFeatures = userAssets.map(asset => ({
-      type: 'Feature',
-      id: asset.id,
-      geometry: {
-        type: 'Point',
-        coordinates: [asset.longitude, asset.latitude]
-      },
-      properties: {
+    const userFeatures = userAssets.map(asset => {
+      // Create a small square polygon around the point for 3D extrusion
+      const size = 0.00015; // roughly 15-20 meters
+      const coords = [
+        [asset.longitude - size, asset.latitude - size],
+        [asset.longitude + size, asset.latitude - size],
+        [asset.longitude + size, asset.latitude + size],
+        [asset.longitude - size, asset.latitude + size],
+        [asset.longitude - size, asset.latitude - size]
+      ];
+
+      return {
+        type: 'Feature',
         id: asset.id,
-        title: asset.title,
-        height: 20, // Default height for user assets
-        cost: asset.cost,
-        yield: asset.yield,
-        roi: asset.roi,
-        status: asset.status + 1, // Map status to 1, 2, 3
-        owner: asset.ownerUid === user?.uid ? 'YOU' : 'OTHER',
-        type: asset.type,
-        isUserAsset: true,
-        address: asset.address,
-        description: asset.description,
-        sqft: asset.sqft,
-        yearBuilt: asset.yearBuilt,
-        parkingSpaces: asset.parkingSpaces
-      }
-    }));
+        geometry: {
+          type: 'Polygon',
+          coordinates: [coords]
+        },
+        properties: {
+          id: asset.id,
+          title: asset.title,
+          height: 20, // Default height for user assets
+          model: asset.model,
+          cost: asset.cost,
+          yield: asset.yield,
+          roi: asset.roi,
+          status: asset.status + 1, // Map status to 1, 2, 3
+          owner: asset.ownerUid === user?.uid ? 'YOU' : 'OTHER',
+          type: asset.type,
+          isUserAsset: true,
+          address: asset.address,
+          description: asset.description,
+          sqft: asset.sqft,
+          yearBuilt: asset.yearBuilt,
+          parkingSpaces: asset.parkingSpaces
+        }
+      };
+    });
 
     const combinedFeatures = [...buildingsData.features, ...userFeatures];
 
@@ -872,35 +1443,58 @@ export default function App() {
     return () => cancelAnimationFrame(frame);
   }, []);
 
-  // Connection Test
-  useEffect(() => {
-    const testConnection = async () => {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if (error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Firestore is offline. Check your configuration.");
-        }
-      }
-    };
-    testConnection();
-  }, []);
+  const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
+  const [performanceHistory, setPerformanceHistory] = useState<{time: string, value: number}[]>([]);
 
-  // Logo timeout
+  // Game State
+  const [totalYield, setTotalYield] = useState(0);
+  const [portfolioValue, setPortfolioValue] = useState(0);
+
+  // Track performance history
   useEffect(() => {
-    const timer = setTimeout(() => setShowLogo(false), 10000);
-    return () => clearTimeout(timer);
-  }, []);
+    if (performanceHistory.length === 0) {
+      setPerformanceHistory([{ time: new Date().toLocaleTimeString(), value: balance + portfolioValue }]);
+    }
+    
+    const interval = setInterval(() => {
+      setPerformanceHistory(prev => {
+        const newData = [...prev, { time: new Date().toLocaleTimeString(), value: balance + portfolioValue }];
+        if (newData.length > 20) return newData.slice(1);
+        return newData;
+      });
+    }, 10000);
+    
+    return () => clearInterval(interval);
+  }, [balance, portfolioValue]);
+
+  // Mutual exclusivity for mobile panels
+  useEffect(() => {
+    if (window.innerWidth < 640) {
+      if (chatOpen) setLegendOpen(false);
+    }
+  }, [chatOpen]);
+
+  useEffect(() => {
+    if (window.innerWidth < 640) {
+      if (legendOpen) setChatOpen(false);
+    }
+  }, [legendOpen]);
+
+  useEffect(() => {
+    if (window.innerWidth < 640) {
+      if (dashboardOpen) {
+        setChatOpen(false);
+        setLegendOpen(false);
+      }
+    }
+  }, [dashboardOpen]);
 
   // Apply theme to body
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', colorScheme);
     document.documentElement.setAttribute('data-mode', mode);
-  }, [colorScheme, mode]);
-
-  // Game State
-  const [totalYield, setTotalYield] = useState(0);
-  const [portfolioValue, setPortfolioValue] = useState(0);
+    document.documentElement.setAttribute('data-ui-style', uiStyle);
+  }, [colorScheme, mode, uiStyle]);
 
   // Yield Collection Effect
   useEffect(() => {
@@ -932,6 +1526,8 @@ export default function App() {
   const handleSearch = useCallback(async () => {
     if (!searchQuery.trim()) return;
     
+    setLastInteraction(Date.now());
+    setIsAutoRotating(false);
     setIsSearching(true);
     try {
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5`);
@@ -972,6 +1568,9 @@ export default function App() {
     
     if (isNaN(latitude) || isNaN(longitude)) return;
 
+    setLastInteraction(Date.now());
+    setIsAutoRotating(false);
+
     mapRef.current?.flyTo({
       center: [longitude, latitude],
       zoom: 16,
@@ -987,6 +1586,7 @@ export default function App() {
   const [newAsset, setNewAsset] = useState({
     title: '',
     type: 'retail',
+    model: 'house',
     cost: 0,
     yield: 0,
     description: '',
@@ -998,6 +1598,49 @@ export default function App() {
     parkingSpaces: 0
   });
   const [isCreating, setIsCreating] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [dataOnlyMode, setDataOnlyMode] = useState(false);
+  const [showGrid, setShowGrid] = useState(true);
+  const [isAccessGranted, setIsAccessGranted] = useState(false);
+  const [terminalInput, setTerminalInput] = useState('');
+  const [terminalStatus, setTerminalStatus] = useState<'idle' | 'handshake' | 'granted'>('idle');
+
+  const handleAIAnalysis = async (building: BuildingInfo) => {
+    if (!building) return;
+    setIsAnalyzing(true);
+    setAiAnalysis(null);
+    
+    try {
+      const prompt = `Analyze the investment potential of the following building:
+      Title: ${building.properties.title || 'Unknown'}
+      Type: ${building.properties.type || 'Unknown'}
+      Market Value: $${(building.properties as any).cost?.toLocaleString() || 'N/A'}
+      Monthly Yield: $${(building.properties as any).yield?.toLocaleString() || 'N/A'}
+      ROI: ${building.properties.roi !== undefined ? building.properties.roi + '%' : 'N/A'}
+      Description: ${building.properties.description || 'No description available.'}
+      
+      Please provide a concise analysis including:
+      1. Market Value assessment.
+      2. Monthly Yield potential.
+      3. ROI evaluation.
+      4. Overall investment recommendation (Buy, Hold, or Sell).
+      
+      Keep the response professional and tactical, fitting a high-tech investment dashboard. Use markdown for formatting.`;
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: prompt
+      });
+      
+      setAiAnalysis(response.text || "No analysis generated.");
+    } catch (error) {
+      console.error("AI Analysis failed:", error);
+      setAiAnalysis("Failed to perform AI analysis. Please try again later.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
   const [createError, setCreateError] = useState<string | null>(null);
 
   const handleCreateAsset = async () => {
@@ -1010,14 +1653,36 @@ export default function App() {
         ...newAsset,
         roi,
         status: 0, // Default stable
-        ownerUid: user.uid,
-        createdAt: serverTimestamp()
+        ownerUid: user.uid
       };
-      await addDoc(collection(db, "assets"), assetData);
+      
+      const res = await fetch('/api/assets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(assetData)
+      });
+      
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to create asset");
+      }
+      
+      const data = await res.json();
+      setUserAssets(prev => [data.asset, ...prev]);
+      setBalance(data.balance);
+      
+      // Success notification
+      const notification = document.createElement('div');
+      notification.className = 'fixed bottom-24 left-1/2 -translate-x-1/2 z-[200] apple-glass px-6 py-3 rounded-2xl border border-primary/30 text-primary font-bold text-xs uppercase tracking-widest shadow-2xl animate-bounce';
+      notification.innerText = 'Strategic Asset Deployed Successfully';
+      document.body.appendChild(notification);
+      setTimeout(() => notification.remove(), 3000);
+
       setCreateModalOpen(false);
       setNewAsset({
         title: '',
         type: 'retail',
+        model: 'house',
         cost: 0,
         yield: 0,
         description: '',
@@ -1029,7 +1694,7 @@ export default function App() {
         parkingSpaces: 0
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, "assets");
+      console.error("Asset creation error:", error);
       setCreateError(error instanceof Error ? error.message : "Failed to create asset. Check your connection.");
     } finally {
       setIsCreating(false);
@@ -1047,18 +1712,40 @@ export default function App() {
 
   // Rule 1: "Quiet" Frontend - Layers
   const layers = useMemo(() => [
+    showGrid ? new PathLayer({
+      id: 'tactical-grid-map',
+      data: gridLines,
+      getPath: (d: any) => d.path,
+      getColor: [255, 255, 255, gridBrightness * 150],
+      getWidth: 1,
+      widthUnits: 'pixels',
+      updateTriggers: {
+        getColor: [gridBrightness]
+      }
+    } as any) : null,
     showBuildings && filteredBuildings ? createBuildingsLayer(
       filteredBuildings,
       (info) => setHoverInfo(info),
-      (info) => setSelectedBuilding(info),
+      (info) => {
+        setSelectedBuilding(info);
+        setLastInteraction(Date.now());
+        setIsAutoRotating(false);
+      },
       pulse,
       selectedBuilding?.id || null,
+      hoverInfo?.id || null,
       viewState.zoom,
-      buildingScanlineIntensity
+      buildingScanlineIntensity,
+      dataOnlyMode
+    ) : null,
+    showTraffic && roadsData.length > 0 ? createTrafficLayer(
+      roadsData,
+      trafficTime,
+      showTraffic
     ) : null
-  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, buildingScanlineIntensity]);
+  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, buildingScanlineIntensity, showTraffic, roadsData, trafficTime]);
 
-  const handleBuyBuilding = async (id: number, cost: number, yieldAmount: number) => {
+  const handleBuyBuilding = async (id: number | string, cost: number, yieldAmount: number) => {
     if (balance >= cost && !portfolio.includes(id)) {
       const newBalance = balance - cost;
       const newPortfolio = [...portfolio, id];
@@ -1370,53 +2057,130 @@ export default function App() {
     }
   };
 
+  if (!isAccessGranted) {
+    return (
+      <div className="fixed inset-0 bg-black z-[200] flex flex-col items-center justify-center font-mono p-6">
+        <motion.div 
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="w-full max-w-lg space-y-8"
+        >
+          <div className="space-y-2">
+            <div className="flex items-center gap-2 text-primary/60 text-xs">
+              <Terminal className="w-4 h-4" />
+              <span>SECURE UPLINK ESTABLISHED // NODE_774</span>
+            </div>
+            <div className="text-primary text-lg font-bold tracking-tighter">
+              {terminalStatus === 'idle' && (
+                <div className="flex items-center gap-2">
+                  <span>{">"} ACCESS REQUEST // ENTER CLEARANCE CODE</span>
+                  <motion.div 
+                    animate={{ opacity: [1, 0] }}
+                    transition={{ duration: 0.8, repeat: Infinity }}
+                    className="w-2 h-5 bg-primary"
+                  />
+                </div>
+              )}
+              {terminalStatus === 'handshake' && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="text-secondary"
+                >
+                  HANDSHAKE COMPLETE. DECRYPTING GEOSPATIAL LAYER...
+                </motion.div>
+              )}
+            </div>
+          </div>
+
+          {terminalStatus === 'idle' && (
+            <input 
+              autoFocus
+              type="password"
+              value={terminalInput}
+              onChange={(e) => setTerminalInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  setTerminalStatus('handshake');
+                  setTimeout(() => {
+                    setIsAccessGranted(true);
+                    setTerminalStatus('granted');
+                  }, 2000);
+                }
+              }}
+              className="w-full bg-transparent border-b border-primary/30 outline-none text-primary text-2xl tracking-[0.5em] py-2 focus:border-primary transition-colors"
+            />
+          )}
+
+          <div className="flex flex-col gap-1 text-[10px] text-slate-700 uppercase tracking-widest">
+            <p>Connection: Encrypted (AES-256)</p>
+            <p>Origin: {window.location.hostname}</p>
+            <p>Status: {terminalStatus === 'idle' ? 'Awaiting Credentials' : 'Authorizing...'}</p>
+          </div>
+        </motion.div>
+
+        {/* Scanline Overlay */}
+        <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] z-10" />
+      </div>
+    );
+  }
+
   return (
     <AppErrorBoundary>
       <div className="relative w-full h-screen bg-base overflow-hidden font-sans text-slate-200">
       
       {/* Cinematic Overlays */}
-      <div className="cinematic-overlay" />
-      <div className="cinematic-vignette" />
-      <div className="crt-flicker" />
-      <div className="screen-scan-overlay" style={{ opacity: scanlineIntensity }} />
-      <TacticalHUD lat={viewState.latitude} lon={viewState.longitude} />
+      {uiStyle === 'tactical' && (
+        <>
+          <div className="cinematic-overlay" />
+          <div className="cinematic-vignette" />
+          <div className="crt-flicker" />
+          <div className="screen-scan-overlay" style={{ opacity: scanlineIntensity }} />
+          <div className="tactical-grid" />
+          <TacticalHUD lat={viewState.latitude} lon={viewState.longitude} />
+        </>
+      )}
 
       {/* Tactical Alert Banner */}
-      <div className="absolute top-36 md:top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: [0, 1, 1, 0], y: [ -20, 0, 0, -20] }}
-          transition={{ duration: 4, repeat: Infinity, repeatDelay: 10 }}
-          className="bg-white/20 border border-white/50 px-4 py-1 rounded flex items-center gap-3 backdrop-blur-sm"
-        >
-          <AlertTriangle className="w-3 h-3 text-white animate-pulse" />
-          <span className="text-[8px] font-mono font-bold text-white uppercase tracking-[0.3em]">Warning: Market_Anomaly_Detected // Sector_01</span>
-        </motion.div>
-      </div>
+      {uiStyle === 'tactical' && (
+        <div className="absolute top-36 md:top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
+          <motion.div
+            initial={{ opacity: 0, y: -20 }}
+            animate={{ opacity: [0, 1, 1, 0], y: [ -20, 0, 0, -20] }}
+            transition={{ duration: 4, repeat: Infinity, repeatDelay: 10 }}
+            className="bg-white/20 border border-white/50 px-4 py-1 rounded flex items-center gap-3 backdrop-blur-sm"
+          >
+            <AlertTriangle className="w-3 h-3 text-white animate-pulse" />
+            <span className="text-[8px] font-mono font-bold text-white uppercase tracking-[0.3em]">Warning: Market_Anomaly_Detected // Sector_01</span>
+          </motion.div>
+        </div>
+      )}
 
       {/* Tactical Compass (Image 1 Inspiration) */}
-      <div className="absolute top-24 right-6 z-40 pointer-events-none hidden lg:block">
-        <div className="relative w-24 h-24">
-          <svg className="w-full h-full text-primary/20">
-            <circle cx="48" cy="48" r="46" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="4 4" />
-            <circle cx="48" cy="48" r="36" fill="none" stroke="currentColor" strokeWidth="0.5" />
-          </svg>
-          <motion.div 
-            animate={{ rotate: viewState.bearing }}
-            className="absolute inset-0 flex items-center justify-center"
-          >
-            <div className="w-px h-full bg-primary/40 absolute top-0 left-1/2" />
-            <div className="w-full h-px bg-primary/40 absolute top-1/2 left-0" />
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-2 text-[8px] font-mono font-bold text-primary">N</div>
-            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-2 text-[8px] font-mono font-bold text-slate-500">S</div>
-            <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-2 text-[8px] font-mono font-bold text-slate-500">W</div>
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-2 text-[8px] font-mono font-bold text-slate-500">E</div>
-          </motion.div>
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-1 h-1 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary-accent),1)]" />
+      {uiStyle === 'tactical' && (
+        <div className="absolute top-24 right-20 z-40 pointer-events-none hidden lg:block">
+          <div className="relative w-24 h-24">
+            <svg className="w-full h-full text-primary/20">
+              <circle cx="48" cy="48" r="46" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="4 4" />
+              <circle cx="48" cy="48" r="36" fill="none" stroke="currentColor" strokeWidth="0.5" />
+            </svg>
+            <motion.div 
+              animate={{ rotate: viewState.bearing }}
+              className="absolute inset-0 flex items-center justify-center"
+            >
+              <div className="w-px h-full bg-primary/40 absolute top-0 left-1/2" />
+              <div className="w-full h-px bg-primary/40 absolute top-1/2 left-0" />
+              <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-2 text-[8px] font-mono font-bold text-primary">N</div>
+              <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-2 text-[8px] font-mono font-bold text-slate-500">S</div>
+              <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-2 text-[8px] font-mono font-bold text-slate-500">W</div>
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-2 text-[8px] font-mono font-bold text-slate-500">E</div>
+            </motion.div>
+            <div className="absolute inset-0 flex items-center justify-center">
+              <div className="w-1 h-1 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary-accent),1)]" />
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       {/* Logo Splash */}
       <AnimatePresence>
@@ -1471,63 +2235,6 @@ export default function App() {
                 referrerPolicy="no-referrer"
               />
             </button>
-            
-            <AnimatePresence>
-              {profileOpen && (
-                <motion.div
-                  initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                  animate={{ opacity: 1, y: 0, scale: 1 }}
-                  exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  className="absolute right-0 mt-3 w-64 apple-glass rounded-2xl shadow-2xl border border-white/10 p-4 z-50 space-y-4"
-                >
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-3 p-2 rounded-xl bg-white/5 border border-white/10">
-                      <div className="w-10 h-10 rounded-lg overflow-hidden border border-white/20">
-                        <img 
-                          src={user.photoURL || "https://picsum.photos/seed/user/100/100"} 
-                          alt="Profile" 
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                        />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <p className="text-[10px] font-display font-bold text-white truncate uppercase">{user.displayName || "Anonymous Operative"}</p>
-                          <span className={cn(
-                            "px-1.5 py-0.5 rounded text-[6px] font-bold uppercase tracking-tighter border",
-                            userRole === 'admin' ? "bg-white/20 text-white border-white/30" :
-                            userRole === 'investor' ? "bg-primary/20 text-primary border-primary/30" :
-                            "bg-slate-500/20 text-slate-400 border-slate-500/30"
-                          )}>
-                            {t[userRole] || userRole}
-                          </span>
-                        </div>
-                        <p className="text-[8px] font-mono text-slate-500 truncate">{user.email}</p>
-                      </div>
-                    </div>
-
-                    <div className="grid grid-cols-1 gap-1">
-                      <button className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors text-xs text-slate-300">
-                        <User className="w-4 h-4" />
-                        {t.settings}
-                      </button>
-                      <button className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/5 transition-colors text-xs text-slate-300">
-                        <Shield className="w-4 h-4" />
-                        {t.apiManagement}
-                      </button>
-                    </div>
-
-                    <button 
-                      onClick={handleLogout}
-                      className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/10 transition-colors text-sm text-white"
-                    >
-                      <LogOut className="w-4 h-4" />
-                      {t.signOut}
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
           </div>
         )}
       </div>
@@ -1585,11 +2292,14 @@ export default function App() {
               <button 
                 onClick={() => setFiltersOpen(!filtersOpen)}
                 className={cn(
-                  "p-1 rounded-lg transition-colors flex items-center gap-1.5",
+                  "p-1 rounded-lg transition-colors flex items-center gap-1.5 relative",
                   filtersOpen ? "bg-primary/20 text-primary" : "glass-hover text-slate-500"
                 )}
               >
                 <Filter className="w-3.5 h-3.5" />
+                {(filters.statuses.length < 3 || filters.minRoi > 0 || filters.owner) && !filtersOpen && (
+                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full border border-slate-900 animate-pulse" />
+                )}
                 {filtersOpen ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
               </button>
               <div className="hidden sm:flex items-center gap-1.5 text-[9px] font-mono text-slate-500 bg-slate-800/30 px-1.5 py-0.5 rounded border border-white/5">
@@ -1645,30 +2355,46 @@ export default function App() {
                     <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.status}</label>
                     <div className="grid grid-cols-1 gap-2">
                       {[
-                        { id: 'stable', label: t.stable_status, color: 'text-white' },
-                        { id: 'risk', label: t.risk, color: 'text-white' },
-                        { id: 'anomalous', label: t.anomalous, color: 'text-slate-400' }
-                      ].map(status => (
-                        <button
-                          key={status.id}
-                          onClick={() => toggleStatusFilter(status.id)}
-                          className={cn(
-                            "flex items-center gap-3 p-2.5 rounded-xl border transition-all text-left",
-                            filters.statuses.includes(status.id) 
-                              ? "bg-white/5 border-white/10 shadow-inner" 
-                              : "border-transparent opacity-40 grayscale hover:grayscale-0 hover:opacity-70"
-                          )}
-                        >
-                          {filters.statuses.includes(status.id) ? (
-                            <CheckSquare className={cn("w-4 h-4", status.color)} />
-                          ) : (
-                            <Square className="w-4 h-4 text-slate-600" />
-                          )}
-                          <span className={cn("text-[10px] font-bold uppercase tracking-widest", status.color)}>
-                            {status.label}
-                          </span>
-                        </button>
-                      ))}
+                        { id: 'stable', label: t.stable_status, color: 'text-emerald-400', icon: CheckCircle2, bg: 'bg-emerald-400/10', border: 'border-emerald-400/30' },
+                        { id: 'risk', label: t.risk, color: 'text-red-400', icon: AlertTriangle, bg: 'bg-red-400/10', border: 'border-red-400/30' },
+                        { id: 'anomalous', label: t.anomalous, color: 'text-slate-400', icon: Radio, bg: 'bg-slate-400/10', border: 'border-slate-400/30' }
+                      ].map(status => {
+                        const Icon = status.icon;
+                        const isActive = filters.statuses.includes(status.id);
+                        return (
+                          <button
+                            key={status.id}
+                            onClick={() => toggleStatusFilter(status.id)}
+                            className={cn(
+                              "flex items-center justify-between gap-3 p-3 rounded-xl border transition-all text-left group",
+                              isActive 
+                                ? `${status.bg} ${status.border} shadow-[0_0_15px_rgba(var(--primary-accent),0.05)]` 
+                                : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
+                            )}
+                          >
+                            <div className="flex items-center gap-3">
+                              <div className={cn(
+                                "w-8 h-8 rounded-lg flex items-center justify-center transition-all",
+                                isActive ? status.bg : "bg-white/5"
+                              )}>
+                                <Icon className={cn("w-4 h-4", isActive ? status.color : "text-slate-600")} />
+                              </div>
+                              <span className={cn(
+                                "text-[10px] font-bold uppercase tracking-widest transition-colors",
+                                isActive ? "text-white" : "text-slate-500 group-hover:text-slate-400"
+                              )}>
+                                {status.label}
+                              </span>
+                            </div>
+                            <div className={cn(
+                              "w-5 h-5 rounded-full border flex items-center justify-center transition-all",
+                              isActive ? `${status.border} bg-white/5` : "border-white/10"
+                            )}>
+                              {isActive && <div className={cn("w-2 h-2 rounded-full", status.bg.replace('/10', ''))} />}
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
 
@@ -1679,11 +2405,14 @@ export default function App() {
                         type="range"
                         min="0"
                         max="30"
-                        value={filters.minRoi}
-                        onChange={(e) => setFilters(prev => ({ ...prev, minRoi: parseInt(e.target.value) }))}
+                        value={isNaN(filters.minRoi) ? 0 : filters.minRoi}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setFilters(prev => ({ ...prev, minRoi: isNaN(val) ? 0 : val }));
+                        }}
                         className="flex-1 accent-primary"
                       />
-                      <span className="text-xs font-mono text-primary w-8">{filters.minRoi}%</span>
+                      <span className="text-xs font-mono text-primary w-8">{isNaN(filters.minRoi) ? 0 : filters.minRoi}%</span>
                     </div>
                   </div>
                 </div>
@@ -1733,11 +2462,29 @@ export default function App() {
             if (isNaN(e.viewState.latitude) || isNaN(e.viewState.longitude)) return;
             setViewState(e.viewState);
             setMapCoords({ lat: e.viewState.latitude, lon: e.viewState.longitude });
+            
+            // Stop auto-rotation on user interaction
+            if (isAutoRotating) {
+              setIsAutoRotating(false);
+              setLastInteraction(Date.now());
+            }
           }}
-          mapStyle={basemap}
+          onMouseDown={() => {
+            if (isAutoRotating) {
+              setIsAutoRotating(false);
+              setLastInteraction(Date.now());
+            }
+          }}
+          onTouchStart={() => {
+            if (isAutoRotating) {
+              setIsAutoRotating(false);
+              setLastInteraction(Date.now());
+            }
+          }}
+          mapStyle={dataOnlyMode ? 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json' : basemap}
           style={{ width: '100%', height: '100%' }}
+          onLoad={handleMapLoad}
           reuseMaps
-          transitionDuration={2000}
         >
           {selectedBuilding && 
            selectedBuilding.geometry && 
@@ -1759,6 +2506,11 @@ export default function App() {
                   <div className="w-16 h-16 border-2 border-primary rounded-full animate-ping absolute -inset-4 opacity-20" />
                   <div className="w-12 h-12 border-2 border-primary rounded-full flex items-center justify-center bg-primary/20 backdrop-blur-md shadow-[0_0_30px_rgba(var(--primary-accent-rgb),0.5)] pulsate-glow">
                     <div className="w-3 h-3 bg-primary rounded-full shadow-[0_0_15px_rgba(var(--primary-accent-rgb),1)] pulsate-glow" />
+                  </div>
+                  
+                  {/* ID Highlight Badge */}
+                  <div className="absolute -top-16 left-1/2 -translate-x-1/2 apple-glass px-2 py-1 rounded border border-primary/30 pulsate-glow whitespace-nowrap">
+                    <span className="text-[8px] font-mono font-bold text-primary tracking-widest uppercase">ID: {selectedBuilding.id}</span>
                   </div>
                   
                   {/* Hanging Arrow */}
@@ -1847,12 +2599,86 @@ export default function App() {
               'fill-extrusion-opacity': 0.8
             }}
           />
-          <DeckGLOverlay layers={layers} />
+          <DeckGLOverlay layers={layers} effects={[lightingEffect]} />
         </Map>
+
+        {isAutoRotating && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="absolute top-24 left-1/2 -translate-x-1/2 z-30 pointer-events-none"
+          >
+            <div className="apple-glass px-4 py-1.5 rounded-full border border-primary/30 flex items-center gap-2 shadow-2xl">
+              <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+              <span className="text-[9px] font-display font-bold text-primary uppercase tracking-[0.2em]">
+                {language === 'en' ? 'Auto-Orbit Active' : 'Автооблет активен'}
+              </span>
+            </div>
+          </motion.div>
+        )}
       </div>
 
       {/* UI Overlay */}
       <div className="absolute inset-0 pointer-events-none flex flex-col p-4 sm:p-6 z-20">
+        {/* Project Info Panel (Three.js Interaction) */}
+        <AnimatePresence>
+          {hoveredProject && (
+            <motion.div
+              initial={{ opacity: 0, x: 20, scale: 0.95 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 20, scale: 0.95 }}
+              className="absolute top-24 right-6 w-80 apple-glass rounded-2xl border border-primary/40 shadow-2xl p-5 pointer-events-auto z-50 overflow-hidden"
+            >
+              <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary/0 via-primary to-primary/0" />
+              
+              <div className="flex items-start justify-between mb-4">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <Target className="w-3.5 h-3.5 text-primary animate-pulse" />
+                    <span className="text-[10px] font-display font-bold text-primary uppercase tracking-[0.2em]">Strategic Asset</span>
+                  </div>
+                  <h3 className="text-xl font-bold text-white tracking-tight">{hoveredProject.name}</h3>
+                </div>
+                <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+                  <Radar className="w-5 h-5 text-primary" />
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                    <span className="text-[8px] text-slate-500 uppercase font-bold tracking-widest block mb-1">Entry Cost</span>
+                    <span className="text-sm font-mono font-bold text-white">{hoveredProject.details.cost}</span>
+                  </div>
+                  <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                    <span className="text-[8px] text-slate-500 uppercase font-bold tracking-widest block mb-1">Project ROI</span>
+                    <span className="text-sm font-mono font-bold text-secondary">{hoveredProject.details.roi}</span>
+                  </div>
+                </div>
+
+                <div className="p-3 rounded-xl bg-white/5 border border-white/10">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">Current Status</span>
+                    <span className="px-2 py-0.5 rounded-full bg-primary/20 text-primary text-[8px] font-bold uppercase border border-primary/30">
+                      {hoveredProject.details.status}
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 leading-relaxed italic">
+                    "{hoveredProject.details.description}"
+                  </p>
+                </div>
+
+                <button className="w-full py-2.5 rounded-xl bg-primary text-slate-900 font-bold text-[10px] uppercase tracking-widest hover:bg-primary/90 transition-all shadow-[0_0_20px_rgba(var(--primary-accent),0.3)]">
+                  Access Detailed Briefing
+                </button>
+              </div>
+
+              {/* Decorative Elements */}
+              <div className="absolute -bottom-10 -right-10 w-32 h-32 bg-primary/5 rounded-full blur-3xl pointer-events-none" />
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* Tactical Grid Overlay */}
         <div className="absolute inset-0 pointer-events-none z-10" style={{ opacity: gridBrightness }}>
           <div className="tactical-grid" />
@@ -1870,21 +2696,61 @@ export default function App() {
           <div className="scanline-anim" style={{ opacity: scanlineIntensity }} />
         </div>
         {/* Header */}
-        <header className="flex flex-col sm:flex-row justify-between items-start gap-4 pointer-events-auto">
-          <div className="flex flex-col">
-            <h1 className="text-xl font-bold tracking-tighter flex items-center gap-2 text-white">
-              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center shadow-[0_0_15px_rgba(var(--primary-accent),0.5)] border border-white/20">
-                <Building2 className="w-5 h-5" />
-              </div>
-              <span className="homm-heading text-2xl">{t.title}</span>
-              <span className="text-primary font-display font-light text-lg tracking-[0.3em]">GEO</span>
-            </h1>
-            <p className="text-[8px] text-slate-500 mt-0.5 uppercase tracking-[0.4em] font-mono">
-              {t.subtitle}
-            </p>
+        <header className="flex justify-between items-center gap-2 pointer-events-auto mb-4">
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setDashboardOpen(!dashboardOpen)}
+              className={cn(
+                "w-9 h-9 apple-glass rounded-xl flex items-center justify-center border border-white/10 text-slate-400 hover:text-white transition-all shadow-xl",
+                dashboardOpen && "hidden sm:flex"
+              )}
+            >
+              {dashboardOpen ? <ChevronUp className="-rotate-90 w-4 h-4" /> : <ChevronUp className="rotate-90 w-4 h-4" />}
+            </button>
+            <div className="flex flex-col">
+              <h1 className="text-lg sm:text-xl font-bold tracking-tighter flex items-center gap-2 text-white">
+                <div className="hidden xs:flex w-7 h-7 bg-primary rounded-lg items-center justify-center shadow-[0_0_15px_rgba(var(--primary-accent),0.5)] border border-white/20">
+                  <Building2 className="w-4 h-4" />
+                </div>
+                <span className="homm-heading text-xl sm:text-2xl truncate max-w-[120px] xs:max-w-none">{t.title}</span>
+              </h1>
+              <p className="text-[7px] text-slate-500 mt-0.5 uppercase tracking-[0.3em] font-mono hidden xs:block">
+                {t.subtitle}
+              </p>
+            </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-1.5 sm:gap-3">
+            <button 
+              onClick={() => setInvestorCabinetOpen(true)}
+              className="flex sm:hidden apple-glass rounded-full p-2 items-center justify-center glass-hover transition-all"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5 text-primary" />
+            </button>
+
+            <button 
+              onClick={() => setInvestorCabinetOpen(true)}
+              className="hidden sm:flex apple-glass rounded-full px-4 py-2 items-center gap-3 glass-hover transition-all"
+            >
+              <LayoutDashboard className="w-3.5 h-3.5 text-primary" />
+              <div className="flex flex-col items-start">
+                <span className="text-[8px] text-slate-500 uppercase font-bold leading-none tracking-widest">Portfolio</span>
+                <span className="text-xs font-mono font-bold text-white">
+                  Analysis
+                </span>
+              </div>
+            </button>
+
+            <div className="hidden md:flex apple-glass rounded-full px-4 py-2 items-center gap-3">
+              <Wallet className="w-3.5 h-3.5 text-secondary" />
+              <div className="flex flex-col">
+                <span className="text-[8px] text-slate-500 uppercase font-bold leading-none tracking-widest">{t.treasury}</span>
+                <span className="text-xs font-mono font-bold text-secondary">
+                  ${balance.toLocaleString()}
+                </span>
+              </div>
+            </div>
+
             <button 
               onClick={handleExportCSV}
               className="apple-glass rounded-full p-2 flex items-center justify-center glass-hover transition-all"
@@ -1915,37 +2781,101 @@ export default function App() {
                     </button>
                   </div>
 
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.theme}</label>
-                      <div className="grid grid-cols-3 gap-2">
-                        {themes.map(th => (
-                          <button
-                            key={th}
-                            onClick={() => setColorScheme(th)}
-                            className={cn(
-                              "px-2 py-2 rounded-lg text-[9px] font-bold uppercase tracking-widest border transition-all",
-                              colorScheme === th 
-                                ? "bg-primary/20 border-primary/50 text-primary" 
-                                : "bg-slate-950/50 border-white/5 text-slate-500 hover:border-white/10"
-                            )}
-                          >
-                            {th}
-                          </button>
-                        ))}
+                  <div className="space-y-6">
+                    <div className="space-y-3">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1 flex items-center gap-2">
+                        <LayoutDashboard className="w-3 h-3" />
+                        {t.uiStyle}
+                      </label>
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => {
+                            setUiStyle('tactical');
+                            setBasemap('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
+                          }}
+                          className={cn(
+                            "flex-1 flex flex-col items-center gap-2 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all",
+                            uiStyle === 'tactical' 
+                              ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
+                              : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
+                          )}
+                        >
+                          <Zap className="w-4 h-4" />
+                          {t.tactical}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setUiStyle('professional');
+                            setBasemap('https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json');
+                          }}
+                          className={cn(
+                            "flex-1 flex flex-col items-center gap-2 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all",
+                            uiStyle === 'professional' 
+                              ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
+                              : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
+                          )}
+                        >
+                          <Command className="w-4 h-4" />
+                          {t.professional}
+                        </button>
                       </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.mode}</label>
+                    <div className="space-y-3">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1 flex items-center gap-2">
+                        <Palette className="w-3 h-3" />
+                        {t.theme}
+                      </label>
+                      <div className="grid grid-cols-2 gap-2">
+                        {themes.map(th => {
+                          const themeColors: Record<string, string> = {
+                            tactical: 'bg-white',
+                            cyber: 'bg-[#ff00ff]',
+                            royal: 'bg-[#fbbf24]',
+                            arctic: 'bg-[#38bdf8]',
+                            desert: 'bg-[#f59e0b]',
+                            professional: 'bg-[#2563eb]'
+                          };
+                          const themeLabel = (t as any)[`theme${th.charAt(0).toUpperCase() + th.slice(1)}`] || th;
+                          
+                          return (
+                            <button
+                              key={th}
+                              onClick={() => setColorScheme(th)}
+                              className={cn(
+                                "flex items-center gap-3 px-3 py-2.5 rounded-xl text-[10px] font-bold uppercase tracking-widest border transition-all group relative overflow-hidden",
+                                colorScheme === th 
+                                  ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
+                                  : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10 hover:bg-slate-950/60"
+                              )}
+                            >
+                              <div className={cn("w-3 h-3 rounded-full shadow-sm shrink-0", themeColors[th])} />
+                              <span className="truncate">{themeLabel}</span>
+                              {colorScheme === th && (
+                                <motion.div 
+                                  layoutId="activeTheme"
+                                  className="absolute inset-0 border-2 border-primary/20 pointer-events-none rounded-xl"
+                                />
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1 flex items-center gap-2">
+                        {mode === 'dark' ? <Moon className="w-3 h-3" /> : <Sun className="w-3 h-3" />}
+                        {t.mode}
+                      </label>
                       <div className="flex gap-2">
                         <button
                           onClick={() => setMode('light')}
                           className={cn(
-                            "flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-[9px] font-bold uppercase tracking-widest border transition-all",
+                            "flex-1 flex items-center justify-center gap-2 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all",
                             mode === 'light' 
-                              ? "bg-primary/20 border-primary/50 text-primary" 
-                              : "bg-slate-950/50 border-white/5 text-slate-500 hover:border-white/10"
+                              ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
+                              : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
                           )}
                         >
                           <Sun className="w-3 h-3" />
@@ -1954,10 +2884,10 @@ export default function App() {
                         <button
                           onClick={() => setMode('dark')}
                           className={cn(
-                            "flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-lg text-[9px] font-bold uppercase tracking-widest border transition-all",
+                            "flex-1 flex items-center justify-center gap-2 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all",
                             mode === 'dark' 
-                              ? "bg-primary/20 border-primary/50 text-primary" 
-                              : "bg-slate-950/50 border-white/5 text-slate-500 hover:border-white/10"
+                              ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
+                              : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
                           )}
                         >
                           <Moon className="w-3 h-3" />
@@ -1966,16 +2896,19 @@ export default function App() {
                       </div>
                     </div>
 
-                    <div className="space-y-2">
-                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.language}</label>
+                    <div className="space-y-3">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1 flex items-center gap-2">
+                        <Radio className="w-3 h-3" />
+                        {t.language}
+                      </label>
                       <div className="flex gap-2">
                         <button
                           onClick={() => setLanguage('en')}
                           className={cn(
-                            "flex-1 px-3 py-2 rounded-lg text-[9px] font-bold uppercase tracking-widest border transition-all",
+                            "flex-1 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all",
                             language === 'en' 
-                              ? "bg-primary/20 border-primary/50 text-primary" 
-                              : "bg-slate-950/50 border-white/5 text-slate-500 hover:border-white/10"
+                              ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
+                              : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
                           )}
                         >
                           English
@@ -1983,10 +2916,10 @@ export default function App() {
                         <button
                           onClick={() => setLanguage('ru')}
                           className={cn(
-                            "flex-1 px-3 py-2 rounded-lg text-[9px] font-bold uppercase tracking-widest border transition-all",
+                            "flex-1 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all",
                             language === 'ru' 
-                              ? "bg-primary/20 border-primary/50 text-primary" 
-                              : "bg-slate-950/50 border-white/5 text-slate-500 hover:border-white/10"
+                              ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
+                              : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
                           )}
                         >
                           Русский
@@ -2009,6 +2942,25 @@ export default function App() {
                         step="0.01" 
                         value={scanlineIntensity} 
                         onChange={(e) => setScanlineIntensity(parseFloat(e.target.value))}
+                        className="w-full h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-primary"
+                      />
+                    </div>
+
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center px-1">
+                        <div className="flex items-center gap-2">
+                          <Layers className="w-3 h-3 text-slate-500" />
+                          <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">{t.gridBrightness}</label>
+                        </div>
+                        <span className="text-[10px] font-mono text-primary">{(gridBrightness * 100).toFixed(0)}%</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="1" 
+                        step="0.01" 
+                        value={gridBrightness} 
+                        onChange={(e) => setGridBrightness(parseFloat(e.target.value))}
                         className="w-full h-1.5 bg-slate-950 rounded-lg appearance-none cursor-pointer accent-primary"
                       />
                     </div>
@@ -2063,7 +3015,7 @@ export default function App() {
                     initial={{ opacity: 0, y: 10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute right-0 mt-2 w-64 bg-slate-900/95 backdrop-blur-xl border border-slate-800 rounded-xl shadow-2xl p-1.5 z-50"
+                    className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-2rem)] bg-slate-900/95 backdrop-blur-xl border border-slate-800 rounded-xl shadow-2xl p-1.5 z-50"
                   >
                     {[
                       { 
@@ -2125,49 +3077,127 @@ export default function App() {
                     initial={{ opacity: 0, y: 10, scale: 0.95 }}
                     animate={{ opacity: 1, y: 0, scale: 1 }}
                     exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute right-0 mt-2 w-80 bg-slate-900/95 backdrop-blur-xl border border-slate-800 rounded-2xl shadow-2xl overflow-hidden z-50"
+                    className="absolute right-0 mt-2 w-96 max-w-[calc(100vw-2rem)] bg-slate-900/98 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden z-50 flex flex-col"
                   >
-                    <div className="p-6 bg-white/10 border-b border-slate-800">
-                      <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center">
-                          <User className="w-6 h-6 text-black" />
+                    {/* Header: Apple/Google Style */}
+                    <div className="p-6 bg-gradient-to-b from-white/5 to-transparent border-b border-white/5">
+                      <div className="flex items-center justify-between mb-6">
+                        <div className="flex items-center gap-4">
+                          <div className="relative">
+                            <div className="w-14 h-14 bg-gradient-to-br from-primary to-secondary rounded-2xl flex items-center justify-center shadow-lg">
+                              {user.photoURL ? (
+                                <img src={user.photoURL} alt="" className="w-full h-full object-cover rounded-2xl" />
+                              ) : (
+                                <User className="w-7 h-7 text-white" />
+                              )}
+                            </div>
+                            <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 border-2 border-slate-900 rounded-full" />
+                          </div>
+                          <div>
+                            <h3 className="text-base font-display font-bold text-white tracking-tight">{user.displayName || user.email?.split('@')[0]}</h3>
+                            <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">{user.email}</p>
+                          </div>
                         </div>
-                        <div>
-                          <h3 className="text-sm font-bold text-white">{user.email}</h3>
-                          <div className="flex items-center gap-1.5 mt-1">
-                            <Shield className={cn("w-3 h-3", userRole === 'admin' ? "text-white" : "text-slate-400")} />
-                            <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                              {userRole === 'anonymous' ? 'Public Access' : userRole === 'investor' ? 'Investor Mode' : 'System Admin'}
-                            </span>
+                        <button 
+                          onClick={() => setProfileOpen(false)}
+                          className="p-2 hover:bg-white/5 rounded-full transition-colors"
+                        >
+                          <X className="w-4 h-4 text-slate-500" />
+                        </button>
+                      </div>
+
+                      {/* Role Badge */}
+                      <div className="flex items-center gap-2 px-3 py-1.5 bg-white/5 rounded-full border border-white/5 w-fit">
+                        <Shield className={cn("w-3 h-3", userRole === 'admin' ? "text-primary" : "text-secondary")} />
+                        <span className="text-[9px] uppercase font-bold tracking-[0.2em] text-slate-300">
+                          {userRole === 'admin' ? 'System Administrator' : userRole === 'investor' ? 'Authorized Investor' : 'Public Access'}
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex-1 overflow-y-auto max-h-[60vh] scrollbar-hide">
+                      {/* Financial Overview - Investor Focus */}
+                      <div className="p-6 space-y-6">
+                        <div className="grid grid-cols-2 gap-4">
+                          <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
+                            <p className="text-[8px] uppercase font-bold text-slate-500 tracking-widest">Available Capital</p>
+                            <p className="text-lg font-display font-bold text-white">${balance.toLocaleString()}</p>
+                          </div>
+                          <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
+                            <p className="text-[8px] uppercase font-bold text-slate-500 tracking-widest">Portfolio Value</p>
+                            <p className="text-lg font-display font-bold text-secondary">${portfolioValue.toLocaleString()}</p>
+                          </div>
+                        </div>
+
+                        {/* Quick Stats */}
+                        <div className="space-y-3">
+                          <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Performance Metrics</h4>
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                              <div className="flex items-center gap-3">
+                                <TrendingUp className="w-4 h-4 text-green-500" />
+                                <span className="text-xs text-slate-300">Annual Yield</span>
+                              </div>
+                              <span className="text-xs font-mono font-bold text-green-500">+${totalYield.toLocaleString()}</span>
+                            </div>
+                            <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                              <div className="flex items-center gap-3">
+                                <Building2 className="w-4 h-4 text-primary" />
+                                <span className="text-xs text-slate-300">Assets Owned</span>
+                              </div>
+                              <span className="text-xs font-mono font-bold text-white">{portfolio.length} Units</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Admin Specific Controls */}
+                        {userRole === 'admin' && (
+                          <div className="space-y-3">
+                            <h4 className="text-[10px] uppercase font-bold text-primary/70 tracking-widest px-1">Admin Console</h4>
+                            <div className="grid grid-cols-2 gap-2">
+                              <button className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-primary/10 border border-primary/20 hover:bg-primary/20 transition-all group">
+                                <LayoutDashboard className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
+                                <span className="text-[9px] uppercase font-bold text-primary tracking-widest">System Logs</span>
+                              </button>
+                              <button className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-primary/10 border border-primary/20 hover:bg-primary/20 transition-all group">
+                                <Terminal className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
+                                <span className="text-[9px] uppercase font-bold text-primary tracking-widest">API Debug</span>
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* General Settings */}
+                        <div className="space-y-2">
+                          <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">System Settings</h4>
+                          <div className="space-y-1">
+                            <button className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition-colors text-xs text-slate-300 group">
+                              <div className="flex items-center gap-3">
+                                <Settings className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" />
+                                <span>Security Preferences</span>
+                              </div>
+                              <ChevronDown className="w-3 h-3 -rotate-90 text-slate-600" />
+                            </button>
+                            <button className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition-colors text-xs text-slate-300 group">
+                              <div className="flex items-center gap-3">
+                                <Key className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" />
+                                <span>Access Credentials</span>
+                              </div>
+                              <ChevronDown className="w-3 h-3 -rotate-90 text-slate-600" />
+                            </button>
                           </div>
                         </div>
                       </div>
                     </div>
 
-                    <div className="p-4 space-y-4">
-                      <div className="space-y-2">
-                        <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-2">Account Settings</h4>
-                        <button className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-800 transition-colors text-sm text-slate-300">
-                          <Settings className="w-4 h-4" />
-                          Preferences
-                        </button>
-                        <button className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-slate-800 transition-colors text-sm text-slate-300">
-                          <Key className="w-4 h-4" />
-                          API Management
-                        </button>
-                      </div>
-
-                      <div className="space-y-2">
-                        <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-2">API Key</h4>
-                        <div className="bg-slate-950 border border-slate-800 rounded-xl p-3 font-mono text-[10px] text-slate-400 flex items-center justify-between">
-                          <span>YS-••••••••••••42X</span>
-                          <button className="text-white hover:text-slate-200">Copy</button>
-                        </div>
-                      </div>
-
-                      <button onClick={handleLogout} className="w-full flex items-center gap-3 p-2 rounded-xl hover:bg-white/10 transition-colors text-sm text-white">
+                    {/* Footer */}
+                    <div className="p-4 bg-black/40 border-t border-white/5">
+                      <button 
+                        onClick={handleLogout}
+                        className="w-full flex items-center justify-center gap-3 py-3 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all text-xs font-bold text-red-400 uppercase tracking-widest"
+                      >
                         <LogOut className="w-4 h-4" />
-                        Sign Out
+                        Terminate Session
                       </button>
                     </div>
                   </motion.div>
@@ -2237,6 +3267,34 @@ export default function App() {
                       </button>
 
                       <button
+                        onClick={() => setShowTraffic(!showTraffic)}
+                        className={cn(
+                          "flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
+                          showTraffic ? "bg-secondary/20 text-secondary border border-secondary/30" : "text-slate-400 hover:bg-white/5"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Activity className="w-3.5 h-3.5" />
+                          {language === 'en' ? 'Live Traffic' : 'Трафик'}
+                        </div>
+                        {showTraffic ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
+
+                      <button
+                        onClick={() => setShowGrid(!showGrid)}
+                        className={cn(
+                          "flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
+                          showGrid ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Grid className="w-3.5 h-3.5" />
+                          {t.tacticalGrid}
+                        </div>
+                        {showGrid ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
+
+                      <button
                         disabled
                         className="flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider text-slate-600 cursor-not-allowed"
                       >
@@ -2289,21 +3347,44 @@ export default function App() {
 
             <div className="flex flex-col tactical-glass energy-border rounded-xl overflow-hidden shadow-xl pointer-events-auto">
               <button 
-                onClick={() => setViewState(v => ({ ...v, zoom: v.zoom + 1 }))}
+                onClick={() => {
+                  if (mapRef.current) {
+                    mapRef.current.easeTo({ zoom: viewState.zoom + 1, duration: 500 });
+                  } else {
+                    setViewState(v => ({ ...v, zoom: v.zoom + 1 }));
+                  }
+                }}
                 className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
                 title="Zoom In"
               >
                 <Plus className="w-5 h-5" />
               </button>
               <button 
-                onClick={() => setViewState(v => ({ ...v, zoom: v.zoom - 1 }))}
+                onClick={() => {
+                  if (mapRef.current) {
+                    mapRef.current.easeTo({ zoom: viewState.zoom - 1, duration: 500 });
+                  } else {
+                    setViewState(v => ({ ...v, zoom: v.zoom - 1 }));
+                  }
+                }}
                 className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
                 title="Zoom Out"
               >
                 <Minus className="w-5 h-5" />
               </button>
               <button 
-                onClick={() => setViewState(v => ({ ...v, pitch: 60, bearing: -20 }))}
+                onClick={() => {
+                  if (mapRef.current) {
+                    mapRef.current.flyTo({
+                      pitch: 60,
+                      bearing: -20,
+                      duration: 1500,
+                      essential: true
+                    });
+                  } else {
+                    setViewState(v => ({ ...v, pitch: 60, bearing: -20 }));
+                  }
+                }}
                 className="p-3 hover:bg-slate-800 transition-colors text-slate-400"
                 title="Reset View"
               >
@@ -2320,12 +3401,17 @@ export default function App() {
               initial={{ opacity: 0, x: -20 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0, x: -20 }}
-              className="mt-auto mb-4 sm:mb-6 w-full max-w-[280px] sm:max-w-xs apple-glass rounded-xl p-4 sm:p-5 pointer-events-auto shadow-2xl"
+              className="mt-auto mb-4 sm:mb-6 w-[calc(100vw-2rem)] sm:w-full sm:max-w-xs apple-glass rounded-xl p-4 sm:p-5 pointer-events-auto shadow-2xl"
             >
               <div className="flex justify-between items-start mb-4 sm:mb-5">
                 <div>
                   <h3 className="text-lg font-display font-bold text-[var(--text-main)] tracking-tight uppercase">{t.sector} #{hoverInfo.id}</h3>
-                  <p className="text-[9px] text-slate-500 font-mono tracking-widest uppercase">Sector_ID: {hoverInfo.id}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[9px] text-slate-500 font-mono tracking-widest uppercase">Sector_ID:</p>
+                    <span className="px-1.5 py-0.5 bg-secondary/10 border border-secondary/30 rounded text-[8px] font-bold text-secondary pulsate-glow-secondary">
+                      {hoverInfo.id}
+                    </span>
+                  </div>
                 </div>
                 <div className={cn(
                   "px-2.5 py-0.5 rounded-full text-[8px] font-bold uppercase tracking-widest border",
@@ -2538,13 +3624,18 @@ export default function App() {
               <div className="p-5 sm:p-6 pt-8 sm:pt-10 overflow-y-auto flex-1 scrollbar-hide">
                 <div className="flex justify-between items-start mb-6">
                   <div>
-                    <h2 className="text-xl font-display font-bold text-[var(--text-main)] tracking-tight uppercase">
-                      {selectedBuilding.properties.title || t.portfolio}
-                    </h2>
+                    <div className="flex items-center gap-3">
+                      <h2 className="text-xl font-display font-bold text-[var(--text-main)] tracking-tight uppercase">
+                        {selectedBuilding.properties.title || t.portfolio}
+                      </h2>
+                      <div className="px-2 py-0.5 bg-primary/10 border border-primary/30 rounded text-[9px] font-mono font-bold text-primary pulsate-glow">
+                        ID: {selectedBuilding.id}
+                      </div>
+                    </div>
                     <div className="flex items-center gap-2 mt-0.5 text-slate-500 font-mono text-[9px] tracking-widest uppercase">
                       <MapPin className="w-2.5 h-2.5" />
                       <span>
-                        {selectedBuilding.properties.address || `${t.sector}_01 // ID: ${selectedBuilding.id}`}
+                        {selectedBuilding.properties.address || `${t.sector}_01`}
                       </span>
                     </div>
                   </div>
@@ -2636,6 +3727,53 @@ export default function App() {
                       )}
                     </div>
                   )}
+                  {/* AI Analysis Section */}
+                  <div className="bg-primary/5 rounded-xl p-4 border border-primary/20 mb-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Cpu className="w-4 h-4 text-primary" />
+                        <h3 className="text-[9px] font-display font-bold text-primary uppercase tracking-[0.2em]">{t.aiAnalysis}</h3>
+                      </div>
+                      <button
+                        onClick={() => handleAIAnalysis(selectedBuilding)}
+                        disabled={isAnalyzing}
+                        className={cn(
+                          "px-3 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all flex items-center gap-2",
+                          isAnalyzing 
+                            ? "bg-slate-800 text-slate-500 cursor-not-allowed" 
+                            : "bg-primary text-white hover:bg-primary/80 shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]"
+                        )}
+                      >
+                        {isAnalyzing ? (
+                          <>
+                            <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
+                            {t.analyzing}
+                          </>
+                        ) : (
+                          <>
+                            <Zap className="w-3 h-3" />
+                            {t.aiAnalysis}
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {aiAnalysis ? (
+                      <div className="prose prose-invert prose-xs max-w-none">
+                        <div className="text-[11px] text-slate-300 font-sans leading-relaxed">
+                          <Markdown>{aiAnalysis}</Markdown>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="flex flex-col items-center justify-center py-4 border-2 border-dashed border-primary/10 rounded-lg">
+                        <Radar className="w-6 h-6 text-primary/20 mb-2 animate-pulse" />
+                        <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest text-center px-4">
+                          {isAnalyzing ? "Scanning market data..." : "Initialize AI scan for strategic investment briefing"}
+                        </p>
+                      </div>
+                    )}
+                  </div>
+
                   <div className="bg-base/40 rounded-xl p-4 border border-border/50">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-[9px] font-display font-bold text-slate-400 uppercase tracking-[0.2em]">Strategic Documentation</h3>
@@ -2867,9 +4005,9 @@ export default function App() {
             initial={{ x: -400, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -400, opacity: 0 }}
-            className="absolute left-0 sm:left-4 top-0 sm:top-24 bottom-0 sm:bottom-24 w-full sm:w-72 z-40 flex flex-col gap-4 pointer-events-none p-4 sm:p-0 bg-base/80 sm:bg-transparent backdrop-blur-md sm:backdrop-blur-none"
+            className="absolute left-0 sm:left-4 top-0 sm:top-20 bottom-0 sm:bottom-20 w-full sm:w-72 z-[60] flex flex-col gap-4 pointer-events-none p-4 sm:p-0 bg-base/95 sm:bg-transparent backdrop-blur-xl sm:backdrop-blur-none"
           >
-            <div className="flex sm:hidden justify-between items-center mb-4 pointer-events-auto">
+            <div className="flex sm:hidden justify-between items-center mb-4 pointer-events-auto shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
                   <Building2 className="w-5 h-5 text-white" />
@@ -2881,8 +4019,9 @@ export default function App() {
               </button>
             </div>
 
-            {/* Mobile User Info */}
-            <ParallaxCard className="sm:hidden pointer-events-auto mb-4">
+            <div className="flex-1 overflow-y-auto scrollbar-hide pointer-events-auto space-y-4 pb-10 sm:pb-0">
+              {/* Mobile User Info */}
+              <ParallaxCard className="sm:hidden mb-4">
               <div className="apple-glass rounded-2xl p-4 border border-white/10">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-3">
@@ -2902,78 +4041,30 @@ export default function App() {
               </div>
             </ParallaxCard>
 
-            {/* System Status Card */}
-            <ParallaxCard className="pointer-events-auto">
-              <div className="apple-glass rounded-2xl p-5 border border-white/10 shadow-[0_0_30px_rgba(0,0,0,0.5)]">
-                <div className="flex items-center justify-between mb-6">
-                  <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center border border-primary/30 pulsate-glow">
-                      <Activity className="w-4 h-4 text-primary" />
-                    </div>
-                    <div>
-                      <h3 className="text-[10px] font-display font-bold text-white uppercase tracking-[0.2em]">{t.systemStatus}</h3>
-                      <div className="flex items-center gap-1.5 mt-0.5">
-                        <div className="w-1 h-1 rounded-full bg-primary pulsate-glow" />
-                        <span className="text-[8px] font-mono text-primary uppercase tracking-widest">{t.nominal}</span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex flex-col items-end">
-                    <span className="text-[7px] text-slate-500 uppercase font-bold tracking-widest">{t.threatLevel}</span>
-                    <span className="text-[9px] font-mono text-white">LOW_0.12</span>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-6 mb-6">
-                  <div className="relative w-16 h-16 flex items-center justify-center">
-                    <svg className="w-full h-full -rotate-90">
-                      <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="4" className="text-white/5" />
-                      <circle cx="32" cy="32" r="28" fill="none" stroke="currentColor" strokeWidth="4" strokeDasharray="175.9" strokeDashoffset="44" className="text-primary shadow-[0_0_10px_rgba(var(--primary-accent),0.5)]" />
-                    </svg>
-                    <div className="absolute inset-0 flex flex-col items-center justify-center">
-                      <span className="text-[10px] font-mono font-bold text-white">75%</span>
-                      <span className="text-[5px] text-slate-500 uppercase">Sync</span>
-                    </div>
-                  </div>
-                  <div className="flex-1 space-y-3">
-                    <div className="flex items-center justify-between p-2 rounded-lg bg-white/5 border border-white/5">
-                      <div className="flex items-center gap-2">
-                        <Cpu className="w-2.5 h-2.5 text-slate-500" />
-                        <span className="text-[7px] text-slate-400 uppercase font-bold tracking-widest">{t.activeNodes}</span>
-                      </div>
-                      <span className="text-[8px] font-mono text-white">12,402</span>
-                    </div>
-                    <div className="space-y-1.5">
-                      <div className="flex justify-between items-center">
-                        <span className="text-[6px] text-slate-500 uppercase font-bold tracking-widest">Network_Load</span>
-                        <span className="text-[7px] font-mono text-primary">24%</span>
-                      </div>
-                      <div className="h-0.5 bg-white/5 rounded-full overflow-hidden">
-                        <motion.div 
-                          initial={{ width: 0 }}
-                          animate={{ width: '24%' }}
-                          className="h-full bg-primary shadow-[0_0_10px_rgba(var(--primary-accent),0.5)]"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </ParallaxCard>
-          </motion.div>
+            <button 
+              onClick={() => setInvestorCabinetOpen(true)}
+              className="w-full bg-primary hover:bg-primary/90 text-white font-display font-bold py-4 rounded-xl transition-all active:scale-95 flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-[10px] shadow-[0_0_30px_rgba(var(--primary-accent),0.3)] mt-2 pointer-events-auto"
+            >
+              <LayoutDashboard className="w-4 h-4" />
+              Open Investor Cabinet
+            </button>
+          </div>
+        </motion.div>
         )}
       </AnimatePresence>
 
-      <div className="absolute left-4 top-4 z-50 pointer-events-auto flex flex-col gap-2">
-        <button 
-          onClick={() => setDashboardOpen(!dashboardOpen)}
-          className={cn(
-            "w-10 h-10 apple-glass rounded-xl flex items-center justify-center border border-white/10 text-slate-400 hover:text-white transition-all shadow-xl",
-            dashboardOpen && "hidden sm:flex"
-          )}
-        >
-          {dashboardOpen ? <ChevronUp className="-rotate-90 w-5 h-5" /> : <ChevronUp className="rotate-90 w-5 h-5" />}
-        </button>
+      <InvestorCabinet 
+        isOpen={investorCabinetOpen}
+        onClose={() => setInvestorCabinetOpen(false)}
+        balance={balance}
+        portfolioValue={portfolioValue}
+        totalYield={totalYield}
+        portfolio={portfolio}
+        history={performanceHistory}
+        t={t}
+      />
+
+      <div className="absolute left-4 bottom-24 z-50 pointer-events-auto flex flex-col gap-2">
         {user && (
           <button 
             onClick={() => {
@@ -3031,13 +4122,18 @@ export default function App() {
                     <div className="h-full bg-white w-1/2" />
                   </div>
                 </div>
-              </div>
-            </div>
-
-            <div className="mt-6 pt-4 border-t border-white/5">
-              <div className="flex items-center justify-between text-[7px] font-mono text-slate-600 uppercase tracking-[0.3em]">
-                <span>System Status: Nominal</span>
-                <span>v4.0.2</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{language === 'en' ? 'Traffic: Clear' : 'Трафик: Норма'}</span>
+                  <div className="w-12 h-1.5 bg-green-500/30 rounded-full overflow-hidden">
+                    <div className="h-full bg-green-500 w-full" />
+                  </div>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{language === 'en' ? 'Traffic: Jam' : 'Трафик: Пробки'}</span>
+                  <div className="w-12 h-1.5 bg-red-500/30 rounded-full overflow-hidden">
+                    <div className="h-full bg-red-500 w-full" />
+                  </div>
+                </div>
               </div>
             </div>
           </motion.div>
@@ -3089,6 +4185,50 @@ export default function App() {
                   </div>
                 )}
                 <div className="space-y-4">
+                  <div className="space-y-3">
+                    <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Visual Model</label>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      {[
+                        { id: 'house', label: 'House', icon: <Building2 className="w-4 h-4" />, img: 'https://picsum.photos/seed/house/200/200' },
+                        { id: 'apartment', label: 'Apartment Block', icon: <Building2 className="w-4 h-4" />, img: 'https://picsum.photos/seed/apartment/200/200' },
+                        { id: 'warehouse', label: 'Warehouse', icon: <Building2 className="w-4 h-4" />, img: 'https://picsum.photos/seed/warehouse/200/200' },
+                        { id: 'office', label: 'Office Building', icon: <Building2 className="w-4 h-4" />, img: 'https://picsum.photos/seed/skyscraper/200/200' },
+                      ].map((model) => (
+                        <button
+                          key={model.id}
+                          onClick={() => setNewAsset(prev => ({ ...prev, model: model.id }))}
+                          className={cn(
+                            "group relative aspect-square rounded-2xl overflow-hidden border-2 transition-all",
+                            newAsset.model === model.id 
+                              ? "border-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.3)]" 
+                              : "border-white/5 hover:border-white/20"
+                          )}
+                        >
+                          <img 
+                            src={model.img} 
+                            alt={model.label}
+                            referrerPolicy="no-referrer"
+                            className={cn(
+                              "w-full h-full object-cover transition-transform duration-500",
+                              newAsset.model === model.id ? "scale-110" : "group-hover:scale-105"
+                            )}
+                          />
+                          <div className={cn(
+                            "absolute inset-0 flex flex-col items-center justify-end p-2 bg-gradient-to-t from-black/80 via-black/20 to-transparent transition-opacity",
+                            newAsset.model === model.id ? "opacity-100" : "opacity-60 group-hover:opacity-100"
+                          )}>
+                            <span className="text-[8px] font-bold uppercase tracking-widest text-white mb-1">{model.label}</span>
+                            {newAsset.model === model.id && (
+                              <div className="absolute top-2 right-2 w-4 h-4 bg-primary rounded-full flex items-center justify-center shadow-lg">
+                                <CheckCircle2 className="w-2.5 h-2.5 text-white" />
+                              </div>
+                            )}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   <div className="space-y-2">
                     <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetTitle}</label>
                     <input 
@@ -3118,8 +4258,11 @@ export default function App() {
                       <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetCost}</label>
                       <input 
                         type="number"
-                        value={newAsset.cost}
-                        onChange={(e) => setNewAsset(prev => ({ ...prev, cost: parseFloat(e.target.value) }))}
+                        value={isNaN(newAsset.cost) ? '' : newAsset.cost}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setNewAsset(prev => ({ ...prev, cost: isNaN(val) ? 0 : val }));
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
                       />
                     </div>
@@ -3130,8 +4273,11 @@ export default function App() {
                       <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetYield}</label>
                       <input 
                         type="number"
-                        value={newAsset.yield}
-                        onChange={(e) => setNewAsset(prev => ({ ...prev, yield: parseFloat(e.target.value) }))}
+                        value={isNaN(newAsset.yield) ? '' : newAsset.yield}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setNewAsset(prev => ({ ...prev, yield: isNaN(val) ? 0 : val }));
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
                       />
                     </div>
@@ -3158,8 +4304,11 @@ export default function App() {
                       <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">SQFT</label>
                       <input 
                         type="number"
-                        value={newAsset.sqft}
-                        onChange={(e) => setNewAsset(prev => ({ ...prev, sqft: parseFloat(e.target.value) }))}
+                        value={isNaN(newAsset.sqft) ? '' : newAsset.sqft}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setNewAsset(prev => ({ ...prev, sqft: isNaN(val) ? 0 : val }));
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
                         placeholder="2500"
                       />
@@ -3168,8 +4317,11 @@ export default function App() {
                       <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Year Built</label>
                       <input 
                         type="number"
-                        value={newAsset.yearBuilt}
-                        onChange={(e) => setNewAsset(prev => ({ ...prev, yearBuilt: parseInt(e.target.value) }))}
+                        value={isNaN(newAsset.yearBuilt) ? '' : newAsset.yearBuilt}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setNewAsset(prev => ({ ...prev, yearBuilt: isNaN(val) ? new Date().getFullYear() : val }));
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
                         placeholder="2024"
                       />
@@ -3178,8 +4330,11 @@ export default function App() {
                       <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Parking</label>
                       <input 
                         type="number"
-                        value={newAsset.parkingSpaces}
-                        onChange={(e) => setNewAsset(prev => ({ ...prev, parkingSpaces: parseInt(e.target.value) }))}
+                        value={isNaN(newAsset.parkingSpaces) ? '' : newAsset.parkingSpaces}
+                        onChange={(e) => {
+                          const val = parseInt(e.target.value);
+                          setNewAsset(prev => ({ ...prev, parkingSpaces: isNaN(val) ? 0 : val }));
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
                         placeholder="12"
                       />
@@ -3192,8 +4347,11 @@ export default function App() {
                       <input 
                         type="number"
                         step="0.000001"
-                        value={newAsset.latitude}
-                        onChange={(e) => setNewAsset(prev => ({ ...prev, latitude: parseFloat(e.target.value) }))}
+                        value={isNaN(newAsset.latitude) ? '' : newAsset.latitude}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setNewAsset(prev => ({ ...prev, latitude: isNaN(val) ? 0 : val }));
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
                       />
                     </div>
@@ -3202,8 +4360,11 @@ export default function App() {
                       <input 
                         type="number"
                         step="0.000001"
-                        value={newAsset.longitude}
-                        onChange={(e) => setNewAsset(prev => ({ ...prev, longitude: parseFloat(e.target.value) }))}
+                        value={isNaN(newAsset.longitude) ? '' : newAsset.longitude}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value);
+                          setNewAsset(prev => ({ ...prev, longitude: isNaN(val) ? 0 : val }));
+                        }}
                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
                       />
                     </div>
@@ -3223,8 +4384,13 @@ export default function App() {
               <div className="p-6 border-t border-white/10 bg-black/20">
                 <button 
                   onClick={handleCreateAsset}
-                  disabled={isCreating || !newAsset.title || !newAsset.cost}
-                  className="w-full bg-primary hover:bg-primary/80 disabled:opacity-50 text-white font-bold py-4 rounded-2xl transition-all active:scale-95 text-sm uppercase tracking-[0.2em] shadow-[0_0_20px_rgba(var(--primary-accent),0.4)] flex items-center justify-center gap-3"
+                  disabled={isCreating || !newAsset.title.trim() || !newAsset.cost}
+                  className={cn(
+                    "w-full font-bold py-4 rounded-2xl transition-all active:scale-95 text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3",
+                    (isCreating || !newAsset.title.trim() || !newAsset.cost)
+                      ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-white/5"
+                      : "bg-primary hover:bg-primary/80 text-white shadow-[0_0_20px_rgba(var(--primary-accent),0.4)]"
+                  )}
                 >
                   {isCreating ? (
                     <>
@@ -3262,8 +4428,8 @@ export default function App() {
             <div className="flex flex-col gap-1.5">
               <div className="flex items-center justify-between gap-4 border-b border-white/5 pb-1 mb-1">
                 <div className="flex items-center gap-2">
-                  <div className="w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_5px_rgba(var(--primary-accent),0.5)]" />
-                  <span className="text-[9px] font-mono font-bold text-white uppercase tracking-wider">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary shadow-[0_0_5px_rgba(var(--primary-accent),0.5)] pulsate-glow" />
+                  <span className="text-[9px] font-mono font-bold text-white uppercase tracking-wider pulsate-glow-secondary">
                     ID: {hoverInfo.id}
                   </span>
                 </div>

@@ -1,27 +1,38 @@
-import { GeoJsonLayer } from '@deck.gl/layers';
+import { GeoJsonLayer, TextLayer } from '@deck.gl/layers';
 
 export const createBuildingsLayer = (
   data: any,
   onHover: (info: any) => void, 
   onClick: (info: any) => void, 
   pulse: number = 0,
-  selectedId: number | null = null,
+  selectedId: number | string | null = null,
+  hoveredId: number | string | null = null,
   zoom: number = 15,
-  scanlineIntensity: number = 0.2
+  scanlineIntensity: number = 0.2,
+  dataOnlyMode: boolean = false
 ) => {
   // Performance Optimization: Define granular LOD levels
-  const isVeryLowDetail = zoom < 11;
-  const isLowDetail = zoom >= 11 && zoom < 13;
+  const isFar = zoom < 10;
+  const isVeryLowDetail = zoom >= 10 && zoom < 12;
+  const isLowDetail = zoom >= 12 && zoom < 13;
   const isMediumDetail = zoom >= 13 && zoom < 15;
   const isHighDetail = zoom >= 15;
 
   // LOD Technique: Filter data based on zoom level to reduce rendering load
-  // At lower zoom levels, we only show "significant" assets (e.g., higher value or status)
+  // At lower zoom levels, we only show "significant" assets
   let optimizedData = data;
   
   if (data && data.features) {
-    if (isVeryLowDetail) {
-      // Only show top-tier or anomalous assets at very low zoom
+    if (isFar) {
+      // Only show Landmarks or Billion-dollar assets
+      optimizedData = {
+        ...data,
+        features: data.features.filter((f: any) => 
+          f.properties.status === 3 || (f.properties.cost && f.properties.cost > 1000000000)
+        )
+      };
+    } else if (isVeryLowDetail) {
+      // Only show top-tier or anomalous assets
       optimizedData = {
         ...data,
         features: data.features.filter((f: any) => 
@@ -29,34 +40,56 @@ export const createBuildingsLayer = (
         )
       };
     } else if (isLowDetail) {
-      // Filter out small, low-value assets at low zoom
+      // Filter out small, low-value assets
       optimizedData = {
         ...data,
         features: data.features.filter((f: any) => 
-          f.properties.status >= 2 || (f.properties.cost && f.properties.cost > 100000000)
+          f.properties.status >= 1 || (f.properties.cost && f.properties.cost > 100000000)
         )
       };
     }
   }
 
-  const layers = [
+  const layers: any[] = [
     new GeoJsonLayer({
       id: 'buildings-3d',
       data: optimizedData,
       pickable: zoom >= 13, // Disable picking at low zoom for performance
-      autoHighlight: isHighDetail,
+      autoHighlight: false, 
       highlightColor: [255, 255, 255, 100],
       stroked: isHighDetail, // Only show outlines at high zoom
       lineWidthMinPixels: 1,
       pointRadiusMinPixels: 4,
       getPointRadius: (f: any) => f.properties.isUserAsset ? 8 : 2,
       filled: true,
-      extruded: !isVeryLowDetail && !isLowDetail, // Disable extrusion at low zoom for performance
+      wireframe: isHighDetail, // Wireframe is expensive, only show at high zoom
+      extruded: zoom >= 13, // Disable extrusion at low zoom for performance
       
+      // Material optimization based on zoom
+      material: isHighDetail ? {
+        ambient: 0.4,
+        diffuse: 0.6,
+        shininess: 60,
+        specularColor: [100, 100, 100]
+      } : false, // Disable complex material at distance
+
       // LOD: Simplify elevation calculation
       getElevation: (f: any) => {
-        if (isVeryLowDetail || isLowDetail) return 0;
-        const height = f?.properties?.height || 20;
+        if (zoom < 13) return 0;
+        
+        // Custom height based on model type if available
+        let height = f?.properties?.height || 20;
+        const model = f?.properties?.model;
+        
+        if (model) {
+          switch (model) {
+            case 'office': height = 150; break;
+            case 'apartment': height = 40; break;
+            case 'warehouse': height = 15; break;
+            case 'house': height = 10; break;
+          }
+        }
+
         if (f?.properties?.id === selectedId) {
           // Subtle breathing effect for selected building
           return height * (1.5 + 0.05 * pulse);
@@ -66,26 +99,32 @@ export const createBuildingsLayer = (
 
       // LOD: Simplify color and line calculations
       getLineColor: (f: any) => {
+        if (dataOnlyMode) return [16, 185, 129, 200]; // Emerald for Data Only
         if (!isHighDetail) return [0, 0, 0, 0];
         const id = f?.properties?.id;
         if (id === selectedId) {
           // High-intensity tactical pulse for selection
           return [255, 255, 255, 180 + 75 * pulse];
         }
+        if (id === hoveredId) {
+          return [0, 255, 255, 200]; // Cyan highlight on hover
+        }
         const status = f?.properties?.status || 0;
         if (status === 3) return [161, 161, 170, 200]; // Anomalous - Gray
         if (status === 2) return [255, 255, 255, 200]; // Risk - White
-        return [255, 255, 255, 100]; // Stable - Faint White
+        return [255, 255, 255, 60]; // Stable - Faint White
       },
 
       getLineWidth: (f: any) => {
         if (!isHighDetail) return 0;
         const id = f?.properties?.id;
         if (id === selectedId) return 3;
+        if (id === hoveredId) return 2;
         return 1;
       },
 
       getFillColor: (f: any) => {
+        if (dataOnlyMode) return [16, 185, 129, 20]; // Faint emerald fill
         const props = f?.properties || {};
         const id = props.id;
         const status = props.status || 0;
@@ -98,24 +137,43 @@ export const createBuildingsLayer = (
           return [255, 255, 255, 100 + 50 * pulse];
         }
 
+        if (id === hoveredId && isHighDetail) {
+          return [0, 255, 255, 100]; // Subtle cyan fill on hover
+        }
+
         if (status === 3) return [82, 82, 91, 150]; // Anomalous - Dark Gray
         if (status === 2) return [255, 255, 255, 150]; // Risk - White
         
         // Use simpler colors at lower zoom levels
-        if (isVeryLowDetail || isLowDetail) return [20, 20, 20, 150];
+        if (zoom < 13) return [20, 20, 20, 150];
         
-        return [10, 10, 10, 200]; 
+        return [15, 15, 20, 220]; 
       },
 
       _subLayerProps: {
         'polygons-fill': {
           inject: {
-            'vs:#decl': 'varying float vZ;',
-            'vs:#main-end': 'vZ = geometry.position.z;',
-            'fs:#decl': 'varying float vZ;',
+            'vs:#decl': 'varying float vZ; varying vec3 vNormal;',
+            'vs:#main-end': 'vZ = geometry.position.z; vNormal = geometry.worldNormal;',
+            'fs:#decl': 'varying float vZ; varying vec3 vNormal;',
             'fs:#main-end': `
-              float s = sin(vZ * 1.0 - project_uTime * 1.5) * 0.5 + 0.5;
-              gl_FragColor.rgb += s * ${scanlineIntensity} * 0.3;
+              // Vertical scanline effect
+              float s = sin(vZ * 0.8 - project_uTime * 2.0) * 0.5 + 0.5;
+              
+              // Subtle vertical gradient for depth
+              float gradient = clamp(vZ / 100.0, 0.0, 1.0);
+              
+              // Edge highlight based on normal
+              float edge = 1.0 - abs(vNormal.z);
+              
+              gl_FragColor.rgb *= (0.7 + 0.5 * gradient);
+              gl_FragColor.rgb += s * ${scanlineIntensity} * 0.4;
+              gl_FragColor.rgb += edge * 0.1;
+
+              // Hover highlight in shader
+              if (gl_FragColor.g > 0.9 && gl_FragColor.b > 0.9 && gl_FragColor.r < 0.1) {
+                gl_FragColor.rgb += s * 0.2; // Extra pulse for hovered
+              }
             `
           }
         }
@@ -148,9 +206,9 @@ export const createBuildingsLayer = (
       },
 
       updateTriggers: {
-        getFillColor: [pulse, selectedId, zoom],
-        getLineColor: [pulse, selectedId, zoom],
-        getLineWidth: [pulse, selectedId, zoom],
+        getFillColor: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
+        getLineColor: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
+        getLineWidth: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
         getElevation: [zoom, selectedId],
         extruded: [zoom],
         _subLayerProps: [scanlineIntensity]
@@ -166,6 +224,56 @@ export const createBuildingsLayer = (
     } as any)
   ];
 
+  // Add a subtle hover hologram
+  if (hoveredId !== null && hoveredId !== selectedId && isHighDetail) {
+    const hoveredFeature = data.features.find((f: any) => f.properties.id === hoveredId);
+    if (hoveredFeature) {
+      layers.push(
+        new GeoJsonLayer({
+          id: 'hover-hologram',
+          data: {
+            type: 'FeatureCollection',
+            features: [hoveredFeature]
+          },
+          extruded: true,
+          filled: true,
+          stroked: false,
+          getElevation: (f: any) => {
+            let height = f?.properties?.height || 20;
+            const model = f?.properties?.model;
+            if (model) {
+              switch (model) {
+                case 'office': height = 150; break;
+                case 'apartment': height = 40; break;
+                case 'warehouse': height = 15; break;
+                case 'house': height = 10; break;
+              }
+            }
+            return height * 1.1;
+          },
+          getFillColor: [0, 255, 255, 30],
+          _subLayerProps: {
+            'polygons-fill': {
+              inject: {
+                'vs:#decl': 'varying float vZ_hover;',
+                'vs:#main-end': 'vZ_hover = geometry.position.z;',
+                'fs:#decl': 'varying float vZ_hover;',
+                'fs:#main-end': `
+                  float beam = smoothstep(2.0, 0.0, abs(vZ_hover - mod(project_uTime * 10.0, 150.0)));
+                  gl_FragColor.rgb += beam * 0.3;
+                  gl_FragColor.a *= (0.3 + 0.2 * sin(project_uTime * 5.0));
+                `
+              }
+            }
+          },
+          updateTriggers: {
+            getFillColor: [hoveredId]
+          }
+        } as any)
+      );
+    }
+  }
+
   // Add a "Holographic" scanning effect for the selected building
   if (selectedId !== null && isHighDetail) {
     const selectedFeature = data.features.find((f: any) => f.properties.id === selectedId);
@@ -180,7 +288,19 @@ export const createBuildingsLayer = (
           extruded: true,
           filled: true,
           stroked: false,
-          getElevation: (f: any) => (f?.properties?.height || 20) * (1.5 + 0.05 * pulse),
+          getElevation: (f: any) => {
+            let height = f?.properties?.height || 20;
+            const model = f?.properties?.model;
+            if (model) {
+              switch (model) {
+                case 'office': height = 150; break;
+                case 'apartment': height = 40; break;
+                case 'warehouse': height = 15; break;
+                case 'house': height = 10; break;
+              }
+            }
+            return height * (1.5 + 0.05 * pulse);
+          },
           getFillColor: [255, 255, 255, 40],
           _subLayerProps: {
             'polygons-fill': {
@@ -238,8 +358,9 @@ export const createBuildingsLayer = (
                 'fs:#decl': 'varying vec2 vPos;',
                 'fs:#main-end': `
                   float dist = length(vPos);
-                  float ring = smoothstep(0.1, 0.0, abs(fract(dist * 0.05 - project_uTime * 0.5) - 0.5));
-                  gl_FragColor.a *= ring;
+                  float ring1 = smoothstep(0.1, 0.0, abs(fract(dist * 0.05 - project_uTime * 1.0) - 0.5));
+                  float ring2 = smoothstep(0.1, 0.0, abs(fract(dist * 0.03 - project_uTime * 0.7) - 0.5));
+                  gl_FragColor.a *= (ring1 + ring2 * 0.5);
                 `
               }
             }
@@ -262,7 +383,19 @@ export const createBuildingsLayer = (
         filled: false,
         stroked: true,
         lineWidthMinPixels: 4,
-        getElevation: (f: any) => (f?.properties?.height || 20) * (1.5 + 0.05 * pulse) * 1.02, // Slightly higher and synced
+        getElevation: (f: any) => {
+          let height = f?.properties?.height || 20;
+          const model = f?.properties?.model;
+          if (model) {
+            switch (model) {
+              case 'office': height = 150; break;
+              case 'apartment': height = 40; break;
+              case 'warehouse': height = 15; break;
+              case 'house': height = 10; break;
+            }
+          }
+          return height * (1.5 + 0.05 * pulse) * 1.02;
+        },
         getLineColor: [255, 255, 255, 100 + 155 * pulse],
         getLineWidth: 6,
         _subLayerProps: {
@@ -282,6 +415,41 @@ export const createBuildingsLayer = (
         updateTriggers: {
           getLineColor: [pulse],
           getElevation: [pulse]
+        }
+      } as any)
+    );
+  }
+
+  if (dataOnlyMode && isHighDetail) {
+    layers.push(
+      new TextLayer({
+        id: 'roi-labels',
+        data: data.features,
+        getPosition: (f: any) => {
+          const coords = f.geometry.coordinates;
+          const [lng, lat] = f.geometry.type === 'Polygon' ? coords[0][0] : coords;
+          let height = f?.properties?.height || 20;
+          const model = f?.properties?.model;
+          if (model) {
+            switch (model) {
+              case 'office': height = 150; break;
+              case 'apartment': height = 40; break;
+              case 'warehouse': height = 15; break;
+              case 'house': height = 10; break;
+            }
+          }
+          return [lng, lat, height + 5];
+        },
+        getText: (f: any) => `${f.properties.roi || 0}%`,
+        getSize: 16,
+        getColor: [16, 185, 129, 255],
+        getAngle: 0,
+        getTextAnchor: 'middle',
+        getAlignmentBaseline: 'center',
+        fontFamily: 'JetBrains Mono, monospace',
+        fontWeight: 'bold',
+        updateTriggers: {
+          getPosition: [zoom]
         }
       } as any)
     );
