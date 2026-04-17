@@ -9,7 +9,10 @@ export const createBuildingsLayer = (
   hoveredId: number | string | null = null,
   zoom: number = 15,
   scanlineIntensity: number = 0.2,
-  dataOnlyMode: boolean = false
+  dataOnlyMode: boolean = false,
+  investorMode: boolean = false,
+  ownedIds: (number | string)[] = [],
+  simulationYear: number = 2026
 ) => {
   // Performance Optimization: Define granular LOD levels
   const isFar = zoom < 10;
@@ -21,8 +24,33 @@ export const createBuildingsLayer = (
   // LOD Technique: Filter data based on zoom level to reduce rendering load
   // At lower zoom levels, we only show "significant" assets
   let optimizedData = data;
+
+  // Apply Simulation Year Impact
+  if (data && data.features && simulationYear > 2026) {
+    const yearDiff = simulationYear - 2026;
+    optimizedData = {
+      ...data,
+      features: data.features.map((f: any) => {
+        const baseRoi = f.properties.roi || 5;
+        // Deterministic simulation based on ID and year
+        // Buildings with specific IDs (strategic nodes) get higher growth
+        const growthFactor = (parseInt(f.properties.id) % 5 === 0) ? 0.8 : 0.3;
+        const simulatedRoi = parseFloat((baseRoi + (yearDiff * growthFactor)).toFixed(1));
+        
+        return {
+          ...f,
+          properties: {
+            ...f.properties,
+            simulatedRoi,
+            originalRoi: baseRoi,
+            isSimulated: true
+          }
+        };
+      })
+    };
+  }
   
-  if (data && data.features) {
+  if (optimizedData && optimizedData.features) {
     if (isFar) {
       // Only show Landmarks or Billion-dollar assets
       optimizedData = {
@@ -57,13 +85,13 @@ export const createBuildingsLayer = (
       pickable: zoom >= 13, // Disable picking at low zoom for performance
       autoHighlight: false, 
       highlightColor: [255, 255, 255, 100],
-      stroked: isHighDetail, // Only show outlines at high zoom
+      stroked: zoom >= 13, // Ensure outlines are visible for hover/selection feedback
       lineWidthMinPixels: 1,
       pointRadiusMinPixels: 4,
       getPointRadius: (f: any) => f.properties.isUserAsset ? 8 : 2,
       filled: true,
-      wireframe: isHighDetail, // Wireframe is expensive, only show at high zoom
-      extruded: zoom >= 13, // Disable extrusion at low zoom for performance
+      wireframe: isHighDetail, 
+      extruded: zoom >= 13, 
       
       // Material optimization based on zoom
       material: isHighDetail ? {
@@ -73,13 +101,23 @@ export const createBuildingsLayer = (
         specularColor: [100, 100, 100]
       } : false, // Disable complex material at distance
 
-      // LOD: Simplify elevation calculation
+      // LOD: Optimized elevation calculation based on zoom detail levels
       getElevation: (f: any) => {
-        if (zoom < 13) return 0;
+        // At low zoom levels (LOD 0), buildings are effectively flat for performance
+        if (zoom < 12) return 0;
         
-        // Custom height based on model type if available
-        let height = f?.properties?.height || 20;
-        const model = f?.properties?.model;
+        const props = f?.properties || {};
+        const id = props.id;
+        
+        // LOD 1: Simplified height for distance visibility
+        if (zoom < 14) {
+          if (id === selectedId) return 100 * (1.1 + 0.1 * pulse);
+          return 50; 
+        }
+        
+        // LOD 2: Detailed height logic for close-up view
+        let height = props.height || 20;
+        const model = props.model;
         
         if (model) {
           switch (model) {
@@ -90,25 +128,44 @@ export const createBuildingsLayer = (
           }
         }
 
-        if (f?.properties?.id === selectedId) {
-          // Subtle breathing effect for selected building
-          return height * (1.5 + 0.05 * pulse);
+        let finalHeight = height * 1.1;
+
+        // Apply Investor Mode scaling only when zoomed in enough to see detail
+        if (investorMode && zoom >= 15) {
+          const isOwned = ownedIds.includes(id);
+          if (isOwned) {
+            const ltv = props.ltv || 0.65;
+            finalHeight = height * (1 - ltv) * 2;
+          }
         }
-        return height * 1.1;
+
+        if (id === selectedId) {
+          return finalHeight * (1.3 + 0.15 * pulse);
+        }
+        if (id === hoveredId) {
+          return finalHeight * 1.15;
+        }
+        return finalHeight;
       },
 
       // LOD: Simplify color and line calculations
       getLineColor: (f: any) => {
-        if (dataOnlyMode) return [16, 185, 129, 200]; // Emerald for Data Only
-        if (!isHighDetail) return [0, 0, 0, 0];
         const id = f?.properties?.id;
         if (id === selectedId) {
-          // High-intensity tactical pulse for selection
-          return [255, 255, 255, 180 + 75 * pulse];
+          // Tactical pulsating white outline
+          return [255, 255, 255, 200 + 55 * pulse];
         }
         if (id === hoveredId) {
-          return [0, 255, 255, 200]; // Cyan highlight on hover
+          return [0, 255, 255, 255]; // Bright cyan highlight on hover
         }
+
+        if (investorMode) {
+          const isOwned = ownedIds.includes(id);
+          return isOwned ? [16, 185, 129, 255] : [100, 100, 100, 100]; // Emerald for owned, grey for others
+        }
+        if (dataOnlyMode) return [16, 185, 129, 200]; // Emerald for Data Only
+        if (zoom < 15) return [0, 0, 0, 0];
+        
         const status = f?.properties?.status || 0;
         if (status === 3) return [161, 161, 170, 200]; // Anomalous - Gray
         if (status === 2) return [255, 255, 255, 200]; // Risk - White
@@ -116,36 +173,46 @@ export const createBuildingsLayer = (
       },
 
       getLineWidth: (f: any) => {
-        if (!isHighDetail) return 0;
         const id = f?.properties?.id;
-        if (id === selectedId) return 3;
-        if (id === hoveredId) return 2;
+        if (id === selectedId) return 4;
+        if (id === hoveredId) return 3;
         return 1;
       },
 
+      // LOD: Optimized color logic to reduce per-feature computation at distance
       getFillColor: (f: any) => {
-        if (dataOnlyMode) return [16, 185, 129, 20]; // Faint emerald fill
+        if (dataOnlyMode) return [16, 185, 129, 20];
+        
         const props = f?.properties || {};
         const id = props.id;
-        const status = props.status || 0;
+
+        // Extreme Distance LOD: Single static color
+        if (zoom < 11) return [40, 42, 54, 180];
         
-        if (props.isUserAsset) {
-          return [0, 255, 255, 200]; // Cyan for strategic nodes
+        // Medium Distance LOD: Simplified status colors, no interactivity effects
+        if (zoom < 13) {
+          const status = props.status || 0;
+          if (status === 3) return [82, 82, 91, 150];
+          if (status === 2) return [255, 255, 255, 150];
+          return [20, 20, 25, 180];
         }
 
-        if (id === selectedId && isHighDetail) {
+        // Close Zoom LOD: Full interactive logic
+        if (props.isUserAsset) {
+          return [0, 255, 255, 200]; 
+        }
+
+        if (id === selectedId) {
           return [255, 255, 255, 100 + 50 * pulse];
         }
 
-        if (id === hoveredId && isHighDetail) {
-          return [0, 255, 255, 100]; // Subtle cyan fill on hover
+        if (id === hoveredId) {
+          return [0, 255, 255, 100]; 
         }
 
-        if (status === 3) return [82, 82, 91, 150]; // Anomalous - Dark Gray
-        if (status === 2) return [255, 255, 255, 150]; // Risk - White
-        
-        // Use simpler colors at lower zoom levels
-        if (zoom < 13) return [20, 20, 20, 150];
+        const status = props.status || 0;
+        if (status === 3) return [82, 82, 91, 150];
+        if (status === 2) return [255, 255, 255, 150];
         
         return [15, 15, 20, 220]; 
       },
@@ -165,10 +232,20 @@ export const createBuildingsLayer = (
               
               // Edge highlight based on normal
               float edge = 1.0 - abs(vNormal.z);
+
+              // TACTICAL RELIEF SHADING
+              // Fake directional lighting based on world normal
+              vec3 lightDir = normalize(vec3(0.3, 0.5, 1.0));
+              float diff = max(dot(vNormal, lightDir), 0.0) * 0.5 + 0.5;
               
-              gl_FragColor.rgb *= (0.7 + 0.5 * gradient);
+              // Ambient occlusion-like bottom darkening
+              float ao = smoothstep(0.0, 10.0, vZ) * 0.4 + 0.6;
+              
+              gl_FragColor.rgb *= (diff * ao);
+              
               gl_FragColor.rgb += s * ${scanlineIntensity} * 0.4;
               gl_FragColor.rgb += edge * 0.1;
+              gl_FragColor.rgb += vec3(gradient * 0.1);
 
               // Hover highlight in shader
               if (gl_FragColor.g > 0.9 && gl_FragColor.b > 0.9 && gl_FragColor.r < 0.1) {
@@ -209,7 +286,7 @@ export const createBuildingsLayer = (
         getFillColor: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
         getLineColor: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
         getLineWidth: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
-        getElevation: [zoom, selectedId],
+        getElevation: [zoom, selectedId, hoveredId],
         extruded: [zoom],
         _subLayerProps: [scanlineIntensity]
       },
@@ -249,7 +326,7 @@ export const createBuildingsLayer = (
                 case 'house': height = 10; break;
               }
             }
-            return height * 1.1;
+            return height * 1.25;
           },
           getFillColor: [0, 255, 255, 30],
           _subLayerProps: {
@@ -309,22 +386,27 @@ export const createBuildingsLayer = (
                 'vs:#main-end': 'vZ_holo = geometry.position.z; vPos_holo = geometry.position.xy;',
                 'fs:#decl': 'varying float vZ_holo; varying vec2 vPos_holo;',
                 'fs:#main-end': `
-                  // Scanning horizontal beam
-                  float beamPos = mod(project_uTime * 20.0, 150.0);
-                  float beam = smoothstep(2.0, 0.0, abs(vZ_holo - beamPos));
+                  // Multiple tactical scanning beams
+                  float beam1 = smoothstep(3.0, 0.0, abs(vZ_holo - mod(project_uTime * 30.0, 200.0)));
+                  float beam2 = smoothstep(2.0, 0.0, abs(vZ_holo - mod(project_uTime * 25.0 + 50.0, 200.0)));
                   
-                  // Vertical pulse
-                  float pulse_holo = sin(vZ_holo * 0.2 - project_uTime * 2.0) * 0.5 + 0.5;
+                  // Grid interaction
+                  float grid = sin(vZ_holo * 0.5) * cos(vPos_holo.x * 0.1) * cos(vPos_holo.y * 0.1);
+                  float pulse_holo = sin(vZ_holo * 0.1 - project_uTime * 4.0) * 0.5 + 0.5;
 
-                  // Rotating Beacon Effect
+                  // Rotating Beacon Effect (Scanning Radar)
                   float angle = atan(vPos_holo.y, vPos_holo.x);
-                  float rotation = project_uTime * 1.5;
-                  float beacon = smoothstep(0.1, 0.0, abs(fract((angle + rotation) / 6.28318) - 0.5) - 0.45);
+                  float rotation = project_uTime * 2.0;
+                  float beacon = smoothstep(0.15, 0.0, abs(fract((angle + rotation) / 6.283) - 0.5) - 0.45);
                   
-                  gl_FragColor.rgb += beam * 0.8;
-                  gl_FragColor.rgb += pulse_holo * 0.2;
-                  gl_FragColor.rgb += beacon * 0.4;
-                  gl_FragColor.a *= (0.5 + 0.5 * ${pulse});
+                  gl_FragColor.rgb += beam1 * 0.8;
+                  gl_FragColor.rgb += beam2 * 0.4;
+                  gl_FragColor.rgb += pulse_holo * 0.1;
+                  gl_FragColor.rgb += beacon * 0.6;
+                  gl_FragColor.rgb += grid * 0.05 * pulse_holo;
+                  
+                  // Hologram transparency
+                  gl_FragColor.a *= (0.4 + 0.4 * ${pulse});
                 `
               }
             }
@@ -453,6 +535,67 @@ export const createBuildingsLayer = (
         }
       } as any)
     );
+  }
+
+  // Tactical Asset ID Badge (Overlay on map)
+  if ((hoveredId || selectedId) && isHighDetail) {
+    const activeFeatures = data.features.filter((f: any) => 
+      f.properties.id === hoveredId || f.properties.id === selectedId
+    );
+    
+    if (activeFeatures.length > 0) {
+      layers.push(
+        new TextLayer({
+          id: 'tactical-id-badge',
+          data: activeFeatures,
+          getPosition: (f: any) => {
+            const coords = f.geometry.coordinates;
+            const [lng, lat] = f.geometry.type === 'Polygon' ? coords[0][0] : coords;
+            
+            let h = f?.properties?.height || 20;
+            const model = f?.properties?.model;
+            if (model) {
+              switch (model) {
+                case 'office': h = 150; break;
+                case 'apartment': h = 40; break;
+                case 'warehouse': h = 15; break;
+                case 'house': h = 10; break;
+              }
+            }
+            
+            let finalH = h * 1.1;
+            // Note: We use the same scaling logic as getElevation to keep label anchored
+            if (investorMode && ownedIds.includes(f.properties.id)) {
+              const ltv = f.properties.ltv || 0.65;
+              finalH = h * (1 - ltv) * 2;
+            }
+
+            if (f.properties.id === selectedId) finalH = finalH * (1.3 + 0.05 * pulse);
+            else if (f.properties.id === hoveredId) finalH = finalH * 1.15;
+            
+            return [lng, lat, finalH + 15]; // Positioned above the building
+          },
+          getText: (f: any) => `ID_${f.properties.id}`,
+          getSize: 10,
+          getColor: (f: any) => f.properties.id === selectedId ? [255, 255, 255, 255] : [0, 255, 255, 255],
+          characterSet: 'auto',
+          getTextAnchor: 'middle',
+          getAlignmentBaseline: 'bottom',
+          fontFamily: 'JetBrains Mono, monospace',
+          fontWeight: 'bold',
+          background: true,
+          getBackgroundColor: [0, 0, 0, 200],
+          backgroundPadding: [6, 4, 6, 4],
+          borderWidth: 1,
+          getBorderColor: (f: any) => f.properties.id === selectedId ? [255, 255, 255, 100] : [0, 255, 255, 100],
+          updateTriggers: {
+            getPosition: [pulse, selectedId, hoveredId, zoom, investorMode, ownedIds],
+            getColor: [selectedId, hoveredId],
+            getBorderColor: [selectedId, hoveredId]
+          }
+        } as any)
+      );
+    }
   }
 
   return layers;

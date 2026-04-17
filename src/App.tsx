@@ -1,19 +1,23 @@
 import * as React from 'react';
 import { useState, useMemo, useEffect, useCallback, useRef, Component, ErrorInfo, ReactNode } from 'react';
-import { Map, useControl, Layer, MapRef, Marker, Source } from 'react-map-gl/maplibre';
+import { Map, useControl, Layer, MapRef, Marker, Source, NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
 import { MapboxOverlay, MapboxOverlayProps } from '@deck.gl/mapbox';
 import { LightingEffect, AmbientLight, _SunLight as SunLight } from '@deck.gl/core';
 import { createBuildingsLayer } from './layers/buildings';
 import { createTrafficLayer, processRoadsToTrips } from './layers/traffic';
+import { createRiskRadarLayer, createInfrastructureTwinLayer, createFutureProjectsLayer, createStrategicNodesLayer } from './layers/strategic';
 import { ThreeProjectLayer, ProjectModel } from './layers/threeLayer';
 import { GoogleGenAI, Type } from "@google/genai";
 import { soundService } from './services/soundService';
 import { PathLayer } from '@deck.gl/layers';
+import { H3HexagonLayer } from '@deck.gl/geo-layers';
+import * as h3 from 'h3-js';
 // Firebase removed - using local SQLite via API
 import { 
   Building2, 
   Shield, 
   TrendingUp, 
+  TrendingDown,
   MessageSquare, 
   Send,
   User,
@@ -34,6 +38,7 @@ import {
   X,
   ExternalLink,
   MapPin,
+  Satellite,
   ChevronDown,
   Key,
   Settings,
@@ -54,6 +59,9 @@ import {
   Upload,
   Activity,
   Cpu,
+  Handshake,
+  Users,
+  Hammer,
   Radar,
   Terminal,
   Zap,
@@ -63,7 +71,24 @@ import {
   PieChart as PieChartIcon,
   BarChart3,
   LayoutDashboard,
-  Grid
+  Grid,
+  Hexagon,
+  Globe,
+  Database,
+  FileText,
+  Sparkles,
+  History,
+  Printer,
+  Car,
+  ChevronRight,
+  ChevronLeft,
+  Smartphone,
+  ArrowUpRight,
+  ArrowDownRight,
+  Footprints,
+  Clock,
+  AlertCircle,
+  Hourglass
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { cn } from './lib/utils';
@@ -146,6 +171,31 @@ interface MediaItem {
 interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
+}
+
+interface Syndicate {
+  id: string;
+  buildingId: number | string;
+  buildingName: string;
+  targetAmount: number;
+  raisedAmount: number;
+  participants: { uid: string, name: string, amount: number, role: string }[];
+  status: 'OPEN' | 'FUNDED' | 'EXECUTED';
+  adminFeeRate: number;
+  legalFeeRate: number;
+  createdAt: string;
+}
+
+interface SecondaryMarketOrder {
+  id: string;
+  assetId: string | number;
+  assetName: string;
+  sellerUid: string;
+  sellerName: string;
+  price: number;
+  yieldPerCycle: number;
+  status: 'OPEN' | 'SOLD' | 'CANCELLED';
+  createdAt: string;
 }
 
 // Firebase Error Handling
@@ -263,6 +313,7 @@ const translations = {
     layers: "Data Layers",
     buildings: "3D Buildings",
     tacticalGrid: "Tactical Grid",
+    tacticalCells: "Tactical Cells",
     weather: "Atmospheric Intel",
     toggleLayer: "Toggle Visibility",
     signIn: "Authenticate",
@@ -278,6 +329,10 @@ const translations = {
     reset: "Reset Filters",
     apply: "Apply Strategic Filter",
     ownerPlaceholder: "Search by owner identity...",
+    basemapTerminal: "AEGIS Terminal",
+    basemapAerial: "Aerial Intel",
+    basemapStandard: "Standard Intel",
+    basemapSatellite: "Orbital Satellite",
     strategicBriefing: "Strategic Briefing",
     briefingTitle: "MARKET ANALYSIS 2026",
     briefingRisk: "GEOPOLITICAL RISKS",
@@ -318,6 +373,17 @@ const translations = {
     tactical: "Tactical Command",
     professional: "Professional Suite",
     uiStyleDesc: "Switch between combat-ready and polished professional interfaces.",
+    generateReport: "Generate Strategic Report",
+    generatingReport: "Processing Strategic Data...",
+    reportTitle: "Asset Strategic Intelligence Report",
+    reportBuildingInfo: "Cadastral & Building Specifications",
+    reportSWOT: "SWOT: Advantages & Risks",
+    reportTraffic: "Traffic & Accessibility Analysis",
+    reportPopulation: "Demographics & Catchment",
+    reportMarket: "Real Estate Market Trends",
+    reportCompetition: "Competitive Landscape",
+    reportDate: "Protocol Date",
+    reportExport: "Export Secured PDF",
   },
   ru: {
     title: "YARDSOFT",
@@ -377,6 +443,7 @@ const translations = {
     layers: "Слои Данных",
     buildings: "3D Здания",
     tacticalGrid: "Тактическая Сетка",
+    tacticalCells: "Тактические Соты",
     weather: "Атмосферные Данные",
     toggleLayer: "Переключить Видимость",
     signIn: "Аутентификация",
@@ -392,6 +459,10 @@ const translations = {
     reset: "Сбросить Фильтры",
     apply: "Применить Фильтр",
     ownerPlaceholder: "Поиск по владельцу...",
+    basemapTerminal: "Терминал AEGIS",
+    basemapAerial: "Аэрофотосъемка",
+    basemapStandard: "Стандартная Инфокарта",
+    basemapSatellite: "Орбитальный Спутник",
     strategicBriefing: "Стратегический Брифинг",
     briefingTitle: "АНАЛИЗ РЫНКА 2026",
     briefingRisk: "ГЕОПОЛИТИЧЕСКИЕ РИСКИ",
@@ -405,6 +476,17 @@ const translations = {
     coordinates: "Координаты",
     globalValuation: "Глобальная Оценка",
     sectorAnalysis: "Анализ Сектора",
+    generateReport: "Сформировать Отчет",
+    generatingReport: "Обработка Данных...",
+    reportTitle: "Стратегический Отчет по Объекту",
+    reportBuildingInfo: "Общая Информация о Здании",
+    reportSWOT: "Преимущества и Недостатки",
+    reportTraffic: "Анализ Трафика",
+    reportPopulation: "Население и Зона Охвата",
+    reportMarket: "Аренда и Продажа",
+    reportCompetition: "Конкуренция",
+    reportDate: "Дата Протокола",
+    reportExport: "Экспорт в PDF",
     gridBrightness: "Яркость Сетки",
     scanlineIntensity: "Сканирование Экрана",
     buildingScanlines: "Сканирование Зданий",
@@ -541,251 +623,1359 @@ const ParallaxCard = ({ children, className }: { children: React.ReactNode, clas
   );
 };
 
+const TacticalTicker = () => {
+  const [messages] = useState([
+    "ANOMALY DETECTED: OBJ #4432 YIELD DROP -2.1% SIGMA 3",
+    "LEASE EXPIRING: OBJ #8821 IN 45 DAYS",
+    "CADASTRAL UPDATE: SECTOR 7 VALUATION +4.2%",
+    "SECURE UPLINK STABLE // LATENCY 12MS",
+    "MARKET VOLATILITY: LOW // AEGIS STATUS: NOMINAL"
+  ]);
+
+  return (
+    <div className="h-6 bg-black border-t border-primary/20 flex items-center overflow-hidden whitespace-nowrap">
+      <motion.div
+        animate={{ x: [0, -1000] }}
+        transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
+        className="flex gap-12"
+      >
+        {[...messages, ...messages].map((msg, i) => (
+          <div key={i} className="flex items-center gap-2">
+            <div className="w-1 h-1 bg-primary rounded-full animate-pulse" />
+            <span className="text-[8px] font-mono text-primary/80 uppercase tracking-widest">{msg}</span>
+          </div>
+        ))}
+      </motion.div>
+    </div>
+  );
+};
+
+const StrategicOverview = ({ portfolio, balance, portfolioValue, performanceHistory }: any) => {
+  const aum = portfolioValue;
+  const nav = portfolioValue * 0.85; // Simulated leverage
+  const cashDrag = (balance / (balance + portfolioValue)) * 100;
+  const anomalies = portfolio.filter((p: any) => p.status === 3).length;
+
+  // Group portfolio by ROI segments
+  const roiDistribution = useMemo(() => {
+    const segments = [
+      { name: '<8%', count: 0, color: '#ff4444' },
+      { name: '8-12%', count: 0, color: '#ffbb33' },
+      { name: '12-15%', count: 0, color: '#0bc5ea' },
+      { name: '>15%', count: 0, color: '#00ff9d' },
+    ];
+
+    portfolio.forEach((p: any) => {
+      if (p.roi < 8) segments[0].count++;
+      else if (p.roi < 12) segments[1].count++;
+      else if (p.roi < 15) segments[2].count++;
+      else segments[3].count++;
+    });
+    return segments;
+  }, [portfolio]);
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-white/5 border border-white/10 p-4 rounded-lg relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-2 opacity-5 group-hover:opacity-10 transition-opacity">
+            <TrendingUp className="w-8 h-8" />
+          </div>
+          <p className="text-[8px] font-mono text-slate-500 uppercase tracking-widest mb-1">AUM (Exposure)</p>
+          <p className="text-xl font-display font-bold text-white">${aum.toLocaleString()}</p>
+          <p className="text-[10px] font-mono text-slate-500">Net Exposure</p>
+        </div>
+        <div className="bg-white/5 border border-white/10 p-4 rounded-lg relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-2 opacity-5 group-hover:opacity-10 transition-opacity">
+            <Shield className="w-8 h-8" />
+          </div>
+          <p className="text-[8px] font-mono text-slate-500 uppercase tracking-widest mb-1">Net Asset Value</p>
+          <p className="text-xl font-display font-bold text-emerald-400">${nav.toLocaleString()}</p>
+          <p className="text-[10px] font-mono text-slate-500">LTV: 15.0%</p>
+        </div>
+        <div className="bg-white/5 border border-white/10 p-4 rounded-lg relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-2 opacity-5 group-hover:opacity-10 transition-opacity">
+            <Coins className="w-8 h-8" />
+          </div>
+          <p className="text-[8px] font-mono text-slate-500 uppercase tracking-widest mb-1">Cash Drag</p>
+          <p className={cn("text-xl font-display font-bold", cashDrag > 15 ? "text-yellow-400" : "text-white")}>
+            {cashDrag.toFixed(1)}%
+          </p>
+          <p className="text-[10px] font-mono text-slate-500">${balance.toLocaleString()} Liquid</p>
+        </div>
+        <div className="bg-white/5 border border-white/10 p-4 rounded-lg relative overflow-hidden group">
+          <div className="absolute top-0 right-0 p-2 opacity-5 group-hover:opacity-10 transition-opacity">
+            <AlertTriangle className="w-8 h-8" />
+          </div>
+          <p className="text-[8px] font-mono text-slate-500 uppercase tracking-widest mb-1">Anomalies</p>
+          <p className={cn("text-xl font-display font-bold", anomalies > 0 ? "text-red-400" : "text-emerald-400")}>
+            {anomalies}
+          </p>
+          <p className="text-[10px] font-mono text-slate-500">Risk Vectors</p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+          <h3 className="text-[10px] font-mono text-white uppercase tracking-widest mb-6 flex items-center gap-2">
+            <TrendingUp className="w-3 h-3 text-primary" />
+            Portfolio Performance History // Real-time Feed
+          </h3>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={performanceHistory}>
+                <defs>
+                  <linearGradient id="performanceHistoryGradient" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="var(--primary-accent)" stopOpacity={0.3}/>
+                    <stop offset="95%" stopColor="var(--primary-accent)" stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                <XAxis 
+                  dataKey="time" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fontSize: 8, fill: '#64748b' }}
+                />
+                <YAxis 
+                  hide 
+                  domain={['auto', 'auto']} 
+                />
+                <Tooltip 
+                  contentStyle={{ backgroundColor: '#000', border: '1px solid #ffffff20', fontSize: '10px' }}
+                  itemStyle={{ color: 'var(--primary-accent)' }}
+                />
+                <Area 
+                  type="monotone" 
+                  dataKey="value" 
+                  stroke="var(--primary-accent)" 
+                  fillOpacity={1} 
+                  fill="url(#performanceHistoryGradient)" 
+                  strokeWidth={2}
+                  animationDuration={1500}
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+          <h3 className="text-[10px] font-mono text-white uppercase tracking-widest mb-6 flex items-center gap-2">
+            <BarChart3 className="w-3 h-3 text-secondary" />
+            ROI Distribution Matrix
+          </h3>
+          <div className="h-64 w-full">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={roiDistribution}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#ffffff10" vertical={false} />
+                <XAxis 
+                  dataKey="name" 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fontSize: 8, fill: '#64748b' }}
+                />
+                <YAxis 
+                  axisLine={false} 
+                  tickLine={false} 
+                  tick={{ fontSize: 8, fill: '#64748b' }}
+                />
+                <Tooltip 
+                  cursor={{ fill: '#ffffff05' }}
+                  contentStyle={{ backgroundColor: '#000', border: '1px solid #ffffff20', fontSize: '10px' }}
+                />
+                <Bar dataKey="count" radius={[4, 4, 0, 0]}>
+                  {roiDistribution.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={entry.color} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+        <h3 className="text-[10px] font-mono text-white uppercase tracking-widest mb-6 flex items-center gap-2">
+          <Target className="w-3 h-3 text-primary" />
+          Yield Radar Analysis
+        </h3>
+        <div className="h-72 flex gap-4">
+          <div className="w-8 bg-black/40 rounded-full relative overflow-hidden border border-white/5">
+            <div className="absolute bottom-0 left-0 w-full bg-gradient-to-t from-red-500 via-yellow-500 to-emerald-500 h-[80%]" />
+            <div className="absolute inset-0 flex flex-col justify-between py-4 items-center text-[6px] font-mono text-white/40">
+              <span>25%</span>
+              <span>15%</span>
+              <span>5%</span>
+              <span>0%</span>
+              <span>-5%</span>
+            </div>
+          </div>
+          <div className="flex-1 relative">
+            {portfolio.map((p: any, i: number) => (
+              <motion.div
+                key={i}
+                initial={{ x: -20, opacity: 0 }}
+                animate={{ x: 0, opacity: 1 }}
+                transition={{ delay: i * 0.05 }}
+                className="absolute left-0 w-full h-px bg-white/10 flex items-center"
+                style={{ bottom: `${(p.roi / 25) * 100}%` }}
+              >
+                <div className={cn("w-1.5 h-1.5 rounded-full -ml-0.75", 
+                  p.roi > 12 ? "bg-emerald-400" : p.roi > 8 ? "bg-yellow-400" : "bg-red-400"
+                )} />
+                <span className="text-[7px] font-mono text-white/40 ml-2">OBJ_{p.id} ({p.roi}%)</span>
+              </motion.div>
+            ))}
+            <div className="absolute left-0 w-full h-px bg-red-500/40 border-t border-dashed border-red-500/20" style={{ bottom: '32%' }}>
+              <span className="absolute right-0 -top-3 text-[6px] font-mono text-red-400 uppercase">Risk Threshold (8%)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AssetMatrix = ({ portfolio, onSelect, onSelectAsset, onList }: any) => {
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+
+  return (
+    <div className="bg-white/5 border border-white/10 rounded-lg overflow-hidden flex flex-col h-full">
+      <div className="p-4 border-b border-white/10 flex justify-between items-center">
+        <h3 className="text-[10px] font-mono text-white uppercase tracking-widest flex items-center gap-2">
+          <Database className="w-3 h-3 text-primary" />
+          Asset Matrix // Terminal_01
+        </h3>
+        <div className="flex gap-2">
+          <button className="px-2 py-1 bg-white/5 border border-white/10 rounded text-[7px] text-slate-400 uppercase hover:bg-white/10 transition-colors">Yield {">"} 15%</button>
+          <button className="px-2 py-1 bg-white/5 border border-white/10 rounded text-[7px] text-slate-400 uppercase hover:bg-white/10 transition-colors">Anomalous</button>
+        </div>
+      </div>
+      <div className="flex-1 overflow-y-auto scrollbar-hide">
+        <table className="w-full text-left border-collapse">
+          <thead className="sticky top-0 bg-[#0a0a0a] z-10">
+            <tr className="border-b border-white/10">
+              <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">ID</th>
+              <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Address</th>
+              <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Value (₽)</th>
+              <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Yield</th>
+              <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">ROI 3Y</th>
+              <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Status</th>
+              <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {portfolio.map((p: any, i: number) => (
+              <tr 
+                key={i} 
+                className="group hover:bg-primary/5 transition-colors cursor-pointer"
+                onMouseEnter={() => setHoveredId(p.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                onClick={() => onSelect(p)}
+              >
+                <td className="p-4">
+                  <span className="text-[10px] font-mono text-primary font-bold">#{p.id.toString().substring(0, 8)}</span>
+                </td>
+                <td className="p-4">
+                  <div className="relative h-4 overflow-hidden">
+                    <AnimatePresence mode="wait">
+                      {hoveredId === p.id ? (
+                        <motion.span 
+                          key="address"
+                          initial={{ y: 20 }}
+                          animate={{ y: 0 }}
+                          exit={{ y: -20 }}
+                          className="text-[9px] text-white/80 block"
+                        >
+                          {p.address}
+                        </motion.span>
+                      ) : (
+                        <motion.span 
+                          key="privacy"
+                          initial={{ y: 20 }}
+                          animate={{ y: 0 }}
+                          exit={{ y: -20 }}
+                          className="text-[9px] text-slate-600 block italic"
+                        >
+                          [ PRIVACY MODE ACTIVE ]
+                        </motion.span>
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </td>
+                <td className="p-4">
+                  <span className="text-[10px] font-mono text-white">₽{(p.cost * 80).toLocaleString()}</span>
+                </td>
+                <td className="p-4">
+                  <span className={cn("text-[10px] font-mono font-bold", 
+                    p.roi > 12 ? "text-emerald-400" : p.roi > 8 ? "text-yellow-400" : "text-red-400"
+                  )}>
+                    {p.roi}%
+                  </span>
+                </td>
+                <td className="p-4">
+                  <span className="text-[10px] font-mono text-slate-400">{(p.roi * 2.8).toFixed(1)}%</span>
+                </td>
+                <td className="p-4">
+                  <span className={cn("text-[8px] font-mono px-2 py-0.5 rounded border", 
+                    p.status === 3 ? "bg-red-500/10 border-red-500/30 text-red-400" :
+                    p.status === 2 ? "bg-yellow-500/10 border-yellow-500/30 text-yellow-400" :
+                    "bg-emerald-500/10 border-emerald-500/30 text-emerald-400"
+                  )}>
+                    {p.status === 3 ? 'ANOM' : p.status === 2 ? 'RISK' : 'STABLE'}
+                  </span>
+                </td>
+                <td className="p-4">
+                  <div className="flex gap-2">
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSelectAsset(p);
+                      }}
+                      className="p-1 hover:text-primary transition-colors transition-all active:scale-95"
+                    >
+                      <Radio className="w-3 h-3" />
+                    </button>
+                    <button 
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onList(p);
+                      }}
+                      className="px-2 py-0.5 border border-secondary/30 text-[7px] font-bold text-secondary uppercase tracking-widest hover:bg-secondary/10 transition-all active:scale-95 rounded"
+                    >
+                      Exit_Node
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const DeepDiveTerminal = ({ asset, portfolioDetailed = [], onClose }: any) => {
+  const [activeTab, setActiveTab] = useState(1);
+
+  const typeDistributionData = useMemo(() => {
+    const counts: Record<string, number> = {};
+    portfolioDetailed.forEach((item: any) => {
+      const type = item.type || 'Other';
+      counts[type] = (counts[type] || 0) + 1;
+    });
+    return Object.entries(counts).map(([name, value]) => ({ 
+      name: name.toUpperCase(), 
+      value 
+    }));
+  }, [portfolioDetailed]);
+
+  const COLORS = ['#0bc5ea', '#00ff9d', '#ffbb33', '#ff4444', '#aa66cc'];
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['1', '2', '3', '4'].includes(e.key)) {
+        setActiveTab(parseInt(e.key));
+        soundService.playClick();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, scale: 0.98 }}
+      animate={{ opacity: 1, scale: 1 }}
+      className="absolute inset-0 z-50 bg-black flex flex-col font-mono"
+    >
+      {/* Header */}
+      <div className="h-16 border-b border-white/10 flex items-center justify-between px-6">
+        <div className="flex items-center gap-6">
+          <div className="flex flex-col">
+            <span className="text-[10px] text-primary font-bold tracking-widest uppercase">Deep Dive Terminal</span>
+            <span className="text-[8px] text-slate-500">OBJ_{asset.id} // {asset.address}</span>
+          </div>
+          <div className="flex gap-4 ml-8">
+            {[1, 2, 3, 4].map(i => (
+              <button 
+                key={i}
+                onClick={() => setActiveTab(i)}
+                className={cn("text-[10px] font-bold tracking-widest px-3 py-1 rounded transition-all", 
+                  activeTab === i ? "bg-primary text-black" : "text-slate-500 hover:text-white"
+                )}
+              >
+                [{i}] {i === 1 ? 'FINANCIALS' : i === 2 ? 'GEOSPATIAL' : i === 3 ? 'TENANT MIX' : 'LEGAL'}
+              </button>
+            ))}
+          </div>
+        </div>
+        <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full transition-colors">
+          <X className="w-5 h-5 text-slate-500" />
+        </button>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 p-8 overflow-y-auto scrollbar-hide">
+        {activeTab === 1 && (
+          <div className="grid grid-cols-2 gap-8">
+            <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+              <h4 className="text-[10px] text-white uppercase tracking-widest mb-6">DCF Model (10Y Projection)</h4>
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <AreaChart data={[...Array(10)].map((_, i) => ({ year: 2026 + i, cashflow: asset.yield * 12 * Math.pow(1.05, i) }))}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
+                    <XAxis dataKey="year" stroke="rgba(255,255,255,0.3)" fontSize={8} />
+                    <YAxis stroke="rgba(255,255,255,0.3)" fontSize={8} />
+                    <Tooltip contentStyle={{ backgroundColor: '#000', border: '1px solid #333', fontSize: '10px' }} />
+                    <Area type="monotone" dataKey="cashflow" stroke="var(--primary-accent)" fill="var(--primary-accent)" fillOpacity={0.1} />
+                  </AreaChart>
+                </ResponsiveContainer>
+              </div>
+              <div className="mt-6 grid grid-cols-3 gap-4">
+                <div className="p-3 bg-black/40 rounded border border-white/5">
+                  <p className="text-[7px] text-slate-500 uppercase">Discount Rate</p>
+                  <p className="text-sm font-bold text-white">8.5%</p>
+                </div>
+                <div className="p-3 bg-black/40 rounded border border-white/5">
+                  <p className="text-[7px] text-slate-500 uppercase">Exit Cap Rate</p>
+                  <p className="text-sm font-bold text-white">5.2%</p>
+                </div>
+                <div className="p-3 bg-black/40 rounded border border-white/5">
+                  <p className="text-[7px] text-slate-500 uppercase">NPV</p>
+                  <p className="text-sm font-bold text-emerald-400">${(asset.cost * 1.2).toLocaleString()}</p>
+                </div>
+              </div>
+            </div>
+            <div className="space-y-6">
+              <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                <h4 className="text-[10px] text-white uppercase tracking-widest mb-6 border-b border-white/10 pb-2 flex items-center gap-2">
+                   <Target className="w-3 h-3 text-primary" />
+                   Analytical Risk Profile // Asset DNA
+                </h4>
+                <div className="h-64 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <RadarChart cx="50%" cy="50%" outerRadius="80%" data={[
+                      { subject: 'Liquidity', A: 85, B: 110, fullMark: 150 },
+                      { subject: 'Location', A: 98, B: 130, fullMark: 150 },
+                      { subject: 'Tenant Mix', A: 86, B: 130, fullMark: 150 },
+                      { subject: 'CapEx Risk', A: 99, B: 100, fullMark: 150 },
+                      { subject: 'Market Vol.', A: 85, B: 90, fullMark: 150 },
+                      { subject: 'Regulatory', A: 65, B: 85, fullMark: 150 },
+                    ]}>
+                      <PolarGrid stroke="#ffffff10" />
+                      <PolarAngleAxis dataKey="subject" tick={{ fontSize: 8, fill: '#64748b' }} />
+                      <PolarRadiusAxis hide />
+                      <RechartsRadar
+                        name="Asset"
+                        dataKey="A"
+                        stroke="var(--primary-accent)"
+                        fill="var(--primary-accent)"
+                        fillOpacity={0.4}
+                      />
+                    </RadarChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+              <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">CAPEX Structure</h4>
+                <div className="space-y-4">
+                  {[
+                    { label: 'Roof Replacement', cost: 120000, date: 'Q3 2027', impact: '-0.4% ROI' },
+                    { label: 'HVAC Upgrade', cost: 85000, date: 'Q1 2028', impact: '+0.2% ROI' },
+                    { label: 'Facade Cleaning', cost: 15000, date: 'Q2 2026', impact: 'Neutral' }
+                  ].map((item, i) => (
+                    <div key={i} className="flex justify-between items-center p-2 bg-black/20 rounded">
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-white font-bold">{item.label}</span>
+                        <span className="text-[7px] text-slate-500">{item.date}</span>
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[9px] text-white block">${item.cost.toLocaleString()}</span>
+                        <span className="text-[7px] text-primary">{item.impact}</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Leverage & Debt</h4>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 bg-black/40 rounded border border-white/5 text-center">
+                    <p className="text-[8px] text-slate-500 uppercase mb-1">LTV</p>
+                    <p className="text-xl font-bold text-white">65.0%</p>
+                  </div>
+                  <div className="p-4 bg-black/40 rounded border border-white/5 text-center">
+                    <p className="text-[8px] text-slate-500 uppercase mb-1">DSCR</p>
+                    <p className="text-xl font-bold text-emerald-400">1.85x</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+            
+            {/* Portfolio Asset Diversification */}
+            <div className="col-span-2 bg-white/5 border border-white/10 p-6 rounded-lg mt-8">
+              <h4 className="text-[10px] text-white uppercase tracking-widest mb-6">Portfolio Asset Diversification</h4>
+              <div className="flex items-center gap-12">
+                <div className="h-64 w-1/2">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie
+                        data={typeDistributionData}
+                        cx="50%"
+                        cy="50%"
+                        innerRadius={60}
+                        outerRadius={80}
+                        paddingAngle={5}
+                        dataKey="value"
+                      >
+                        {typeDistributionData.map((entry, index) => (
+                          <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                        ))}
+                      </Pie>
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#000', border: '1px solid #333', fontSize: '10px' }}
+                        itemStyle={{ color: '#fff' }}
+                      />
+                    </PieChart>
+                  </ResponsiveContainer>
+                </div>
+                <div className="flex-1 grid grid-cols-2 gap-4">
+                  {typeDistributionData.map((item, i) => (
+                    <div key={i} className="p-3 bg-black/40 rounded border border-white/5 flex items-center gap-3">
+                      <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[i % COLORS.length] }} />
+                      <div>
+                        <p className="text-[8px] text-slate-500 uppercase">{item.name}</p>
+                        <p className="text-sm font-bold text-white">{item.value} {item.value === 1 ? 'Asset' : 'Assets'}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {activeTab === 2 && (
+          <div className="grid grid-cols-3 gap-8">
+            <div className="col-span-2 bg-white/5 border border-white/10 rounded-lg h-[500px] relative overflow-hidden">
+              <div className="absolute inset-0 bg-slate-900 flex items-center justify-center">
+                <div className="text-center space-y-4">
+                  <Globe className="w-12 h-12 text-primary/20 mx-auto animate-pulse" />
+                  <p className="text-[10px] text-primary/40 uppercase tracking-[0.3em]">Geospatial Engine Initializing...</p>
+                </div>
+              </div>
+              <div className="absolute top-4 left-4 p-3 apple-glass rounded border border-white/10 z-10">
+                <p className="text-[8px] text-white font-bold uppercase mb-2">Traffic Heatmap (Pedestrian)</p>
+                <div className="flex gap-1">
+                  {[...Array(5)].map((_, i) => (
+                    <div key={i} className="w-4 h-1 rounded" style={{ backgroundColor: `rgba(16, 185, 129, ${0.2 * (i + 1)})` }} />
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="space-y-6">
+              <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Zones of Influence (500m)</h4>
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] text-slate-400">Competitors</span>
+                    <span className="text-[9px] text-white font-bold">12 Nodes</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] text-slate-400">New Construction</span>
+                    <span className="text-[9px] text-yellow-400 font-bold">3 Projects</span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[9px] text-slate-400">Public Transit</span>
+                    <span className="text-[9px] text-emerald-400 font-bold">2 Stations</span>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Lidar Scan Analysis</h4>
+                <div className="aspect-square bg-black/40 rounded flex items-center justify-center relative">
+                   <div className="absolute inset-0 border border-primary/10 rounded" />
+                   <Radar className="w-8 h-8 text-primary/20 animate-spin-slow" />
+                   <p className="absolute bottom-4 text-[7px] text-primary/40 uppercase tracking-widest">Scanning Facade Integrity...</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+        {activeTab === 3 && (
+          <div className="space-y-8">
+            <div className="bg-white/5 border border-white/10 rounded-lg overflow-hidden">
+              <table className="w-full text-left border-collapse">
+                <thead>
+                  <tr className="bg-white/5 border-b border-white/10">
+                    <th className="p-4 text-[8px] font-mono text-slate-500 uppercase">Tenant Name</th>
+                    <th className="p-4 text-[8px] font-mono text-slate-500 uppercase">Area %</th>
+                    <th className="p-4 text-[8px] font-mono text-slate-500 uppercase">Lease End</th>
+                    <th className="p-4 text-[8px] font-mono text-slate-500 uppercase">Risk Index</th>
+                    <th className="p-4 text-[8px] font-mono text-slate-500 uppercase">Anchor Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {[
+                    { name: 'Global Tech Corp', area: 45, end: '2029-12', risk: 'LOW', anchor: true },
+                    { name: 'Future Retail', area: 20, end: '2026-06', risk: 'HIGH', anchor: false },
+                    { name: 'Creative Studio', area: 15, end: '2027-08', risk: 'MED', anchor: false }
+                  ].map((t, i) => (
+                    <tr key={i} className="hover:bg-white/5 transition-colors">
+                      <td className="p-4 text-[10px] text-white font-bold">{t.name}</td>
+                      <td className="p-4 text-[10px] text-slate-400">{t.area}%</td>
+                      <td className="p-4 text-[10px] text-slate-400">{t.end}</td>
+                      <td className="p-4">
+                        <span className={cn("text-[8px] font-bold px-2 py-0.5 rounded", 
+                          t.risk === 'LOW' ? "text-emerald-400 bg-emerald-400/10" : 
+                          t.risk === 'MED' ? "text-yellow-400 bg-yellow-400/10" : "text-red-400 bg-red-400/10"
+                        )}>{t.risk}</span>
+                      </td>
+                      <td className="p-4">
+                        {t.anchor ? <CheckCircle2 className="w-3 h-3 text-primary" /> : <X className="w-3 h-3 text-slate-600" />}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="grid grid-cols-2 gap-8">
+               <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                 <h4 className="text-[10px] text-white uppercase tracking-widest mb-6 flex items-center justify-between">
+                    Anchor Exit Sensitivity Analysis
+                    <span className="text-red-400 animate-pulse">VAR: -45%</span>
+                 </h4>
+                 <div className="h-48 w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={[
+                        { month: 'BASE', val: 100, color: 'var(--primary-accent)' },
+                        { month: 'EXIT', val: 55, color: '#ff4444' },
+                        { month: 'RECOV', val: 72, color: '#ffbb33' },
+                        { month: 'STABIL', val: 88, color: '#00ff9d' },
+                      ]}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#ffffff05" vertical={false} />
+                        <XAxis dataKey="month" hide />
+                        <YAxis hide domain={[0, 110]} />
+                        <Tooltip 
+                           contentStyle={{ backgroundColor: '#000', border: '1px solid #333', fontSize: '8px' }}
+                           cursor={{ fill: '#ffffff05' }}
+                        />
+                        <Bar dataKey="val" radius={[2, 2, 0, 0]}>
+                           {[1, 2, 3, 4].map((_, i) => (
+                             <Cell key={i} fill={['#0bc5ea', '#ff4444', '#ffbb33', '#00ff9d'][i]} />
+                           ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                 </div>
+                 <p className="text-[7px] text-slate-500 uppercase mt-4 text-center tracking-widest">Projected recovery horizon: 18 Months</p>
+               </div>
+               <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                 <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">ML Sentiment Analysis</h4>
+                 <div className="space-y-4">
+                   <div className="p-3 bg-emerald-500/5 border border-emerald-500/20 rounded">
+                     <p className="text-[9px] text-emerald-400 font-bold mb-1">Positive Momentum</p>
+                     <p className="text-[8px] text-emerald-400/60">Global Tech Corp announced $2B expansion in sector.</p>
+                   </div>
+                   <div className="p-3 bg-red-500/5 border border-red-500/20 rounded">
+                     <p className="text-[9px] text-red-400 font-bold mb-1">Warning Signal</p>
+                     <p className="text-[8px] text-red-400/60">Future Retail facing liquidity challenges in Q4.</p>
+                   </div>
+                 </div>
+               </div>
+            </div>
+          </div>
+        )}
+        {activeTab === 4 && (
+          <div className="grid grid-cols-2 gap-8">
+            <div className="space-y-6">
+              <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Cadastral & Title</h4>
+                <div className="space-y-3">
+                  <div className="flex justify-between">
+                    <span className="text-[9px] text-slate-500 uppercase">Reg Number</span>
+                    <span className="text-[9px] text-white font-mono">77:01:0001001:4432</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[9px] text-slate-500 uppercase">Last Audit</span>
+                    <span className="text-[9px] text-white">2026-03-12</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-[9px] text-slate-500 uppercase">Encumbrances</span>
+                    <span className="text-[9px] text-emerald-400 font-bold">NONE ACTIVE</span>
+                  </div>
+                </div>
+              </div>
+              <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Due Diligence Docs</h4>
+                <div className="grid grid-cols-2 gap-2">
+                  {['Purchase_Agreement.pdf', 'Title_Deed.pdf', 'Tax_Certificate.pdf', 'Environmental_Report.pdf'].map((doc, i) => (
+                    <div key={i} className="flex items-center gap-2 p-2 bg-black/40 border border-white/5 rounded hover:border-primary/30 cursor-pointer transition-colors">
+                      <FileText className="w-3 h-3 text-primary" />
+                      <span className="text-[8px] text-slate-400 truncate">{doc}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+              <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">EGRN History Log</h4>
+              <div className="space-y-4">
+                {[
+                  { date: '2024-05-10', event: 'Ownership Transfer', status: 'COMPLETED' },
+                  { date: '2022-11-15', event: 'Mortgage Discharge', status: 'VERIFIED' },
+                  { date: '2018-09-01', event: 'Initial Registration', status: 'ARCHIVED' }
+                ].map((log, i) => (
+                  <div key={i} className="flex gap-4 items-start">
+                    <div className="w-16 text-[8px] font-mono text-slate-500">{log.date}</div>
+                    <div className="flex-1">
+                      <p className="text-[9px] text-white font-bold">{log.event}</p>
+                      <p className="text-[7px] text-primary/60">{log.status}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+};
+
+const SyndicateWarRoom = () => (
+  <div className="space-y-8 animate-in fade-in duration-700">
+    <div className="flex justify-between items-center border-b border-white/10 pb-4">
+      <div>
+        <h3 className="text-sm font-mono text-white uppercase tracking-[0.2em] flex items-center gap-3">
+          <Users className="w-4 h-4 text-primary animate-pulse" />
+          Syndicate War Room // Project_Consolidation
+        </h3>
+        <p className="text-[8px] text-slate-500 uppercase mt-1 tracking-widest font-bold">Multi-Institutional Capital Pooling & Governance Steering</p>
+      </div>
+      <div className="flex gap-2">
+        <button className="px-3 py-1 bg-primary text-black text-[9px] font-bold uppercase tracking-widest rounded hover:bg-primary/80 transition-all">Initialize Pool</button>
+      </div>
+    </div>
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 space-y-6">
+        <div className="p-6 rounded-xl bg-white/5 border border-white/10 h-80 flex flex-col items-center justify-center text-center">
+            <div className="w-16 h-16 bg-primary/10 rounded-full flex items-center justify-center border border-primary/20 mb-4">
+              <Lock className="w-8 h-8 text-primary/40" />
+            </div>
+            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No Active Syndicates</h4>
+            <p className="text-[8px] text-slate-600 mt-1 uppercase tracking-tighter">Initiate a joint acquisition project to open a secure war room corridor</p>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/20">
+            <p className="text-[8px] text-slate-500 uppercase mb-1">Total Available Institutional Liquidity</p>
+            <p className="text-xl font-mono font-bold text-emerald-400">$1.24B</p>
+          </div>
+          <div className="p-4 rounded-xl bg-primary/5 border border-primary/20">
+            <p className="text-[8px] text-slate-500 uppercase mb-1">Awaiting Consensus</p>
+            <p className="text-xl font-mono font-bold text-primary">0 Projects</p>
+          </div>
+        </div>
+      </div>
+      <div className="p-6 rounded-xl bg-slate-950 border border-white/5 space-y-6">
+        <h5 className="text-[10px] font-bold text-white uppercase tracking-widest border-b border-white/10 pb-2">Institutional Partners</h5>
+        <div className="space-y-4">
+          {['VTB_Strategic', 'Alpha_Capital', 'GPB_Assets'].map((bank, i) => (
+             <div key={i} className="flex items-center justify-between p-3 bg-white/5 rounded border border-white/5">
+                <span className="text-[10px] font-bold text-slate-300">{bank}</span>
+                <div className="flex items-center gap-2">
+                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                   <span className="text-[7px] text-emerald-500 uppercase font-bold">Online</span>
+                </div>
+             </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+const SecondaryMarket = ({ marketOrders, onBuy, portfolio, user }: any) => (
+  <div className="space-y-8 animate-in fade-in duration-700">
+    <div className="flex justify-between items-center border-b border-white/10 pb-4">
+      <div>
+        <h3 className="text-sm font-mono text-white uppercase tracking-[0.2em] flex items-center gap-3">
+          <ShoppingCart className="w-4 h-4 text-secondary animate-pulse" />
+          Secondary Asset Exchange // Liquidity_Portal
+        </h3>
+        <p className="text-[8px] text-slate-500 uppercase mt-1 tracking-widest font-bold">Transfer of Equity Shares & Fractional Yield Rights</p>
+      </div>
+    </div>
+    <div className="grid grid-cols-4 gap-4">
+       {[
+         { label: 'Market Volume (24h)', val: `$${((marketOrders?.filter((o: any) => o.status === 'SOLD').length || 0) * 1.2).toFixed(1)}M`, trend: '+12%' },
+         { label: 'Active Listings', val: `${marketOrders?.filter((o: any) => o.status === 'OPEN').length || 0}Nodes`, trend: 'Market Open' },
+         { label: 'Pending Bids', val: '14Nodes', trend: 'Active' },
+         { label: 'Platform Fee', val: '2.5%', trend: 'Tier-1' }
+       ].map((stat: any, i: number) => (
+         <div key={i} className="p-4 rounded-lg bg-white/5 border border-white/10">
+           <p className="text-[8px] text-slate-500 uppercase mb-1">{stat.label}</p>
+           <p className="text-lg font-bold text-white">{stat.val}</p>
+           <p className="text-[10px] text-emerald-400 font-mono tracking-widest">{stat.trend}</p>
+         </div>
+       ))}
+    </div>
+    <div className="bg-white/5 border border-white/10 rounded-xl overflow-hidden">
+        <table className="w-full text-left">
+          <thead className="bg-white/5">
+            <tr>
+              <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest">Asset_Node</th>
+              <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest">Seller_ID</th>
+              <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest">Exit_Price</th>
+              <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest">Yield_Relief</th>
+              <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            {marketOrders && marketOrders.filter((o: any) => o.status === 'OPEN').map((order: any) => (
+              <tr key={order.id} className="hover:bg-white/5 transition-colors">
+                 <td className="p-4">
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-bold text-white uppercase tracking-tight">{order.assetName}</span>
+                      <span className="text-[8px] text-slate-600 font-mono uppercase tracking-widest">ID: {order.assetId}</span>
+                    </div>
+                 </td>
+                 <td className="p-4">
+                    <span className="text-[10px] text-slate-400 font-mono uppercase">{order.sellerName.substring(0, 12)}...</span>
+                 </td>
+                 <td className="p-4">
+                    <span className="text-sm font-bold text-primary">${order.price.toLocaleString()}</span>
+                 </td>
+                 <td className="p-4">
+                    <span className="text-[10px] text-emerald-400 font-bold font-mono">+${order.yieldPerCycle.toLocaleString()}/mo</span>
+                 </td>
+                 <td className="p-4">
+                   {order.sellerUid === user?.uid ? (
+                     <div className="text-[8px] text-slate-600 uppercase font-bold tracking-widest border border-white/10 px-3 py-1.5 rounded-lg w-fit">
+                       Your Listing
+                     </div>
+                   ) : (
+                     <button 
+                       onClick={() => onBuy(order)}
+                       className="px-4 py-1.5 bg-secondary text-white text-[9px] font-bold uppercase tracking-widest rounded-lg hover:bg-secondary/80 transition-all shadow-[0_0_15px_rgba(var(--secondary-accent),0.3)] active:scale-95"
+                     >
+                       Execute Bid
+                     </button>
+                   )}
+                 </td>
+              </tr>
+            ))}
+            {(!marketOrders || marketOrders.filter((o: any) => o.status === 'OPEN').length === 0) && (
+              <tr>
+                <td colSpan={5} className="p-20 text-center">
+                   <div className="flex flex-col items-center gap-4 opacity-30">
+                     <TrendingDown className="w-10 h-10 text-slate-500" />
+                     <div>
+                       <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest">Market Liquidity Static</p>
+                       <p className="text-[8px] text-slate-600 mt-1 italic">Awaiting secondary market listings from platform participants</p>
+                     </div>
+                   </div>
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+    </div>
+  </div>
+);
+
 const InvestorCabinet = ({ 
   isOpen, 
   onClose, 
   balance, 
   portfolioValue, 
-  totalYield, 
   portfolio, 
-  history,
-  t 
+  performanceHistory,
+  analyzedHexes = [],
+  marketOrders = [],
+  onListOnMarket,
+  onBuyFromMarket,
+  user,
+  t,
+  onSelectAsset
 }: { 
   isOpen: boolean, 
   onClose: () => void, 
   balance: number, 
   portfolioValue: number, 
-  totalYield: number, 
   portfolio: any[], 
-  history: any[],
-  t: any 
+  performanceHistory: any[],
+  analyzedHexes?: any[],
+  marketOrders?: SecondaryMarketOrder[],
+  onListOnMarket: (asset: any) => void,
+  onBuyFromMarket: (order: SecondaryMarketOrder) => void,
+  user: any,
+  t: any,
+  onSelectAsset: (asset: any) => void
 }) => {
-  const avgRoi = portfolio.length > 0 
-    ? portfolio.reduce((acc, curr) => acc + (curr.roi || 0), 0) / portfolio.length 
-    : 0;
+  const [activeModule, setActiveModule] = useState<'overview' | 'matrix' | 'districts' | 'scenarios' | 'audit' | 'settings' | 'warroom' | 'market'>('overview');
+  const [selectedAsset, setSelectedAsset] = useState<any | null>(null);
+  const [selectedHex, setSelectedHex] = useState<any | null>(null);
 
-  const assetDistribution = useMemo(() => {
-    const counts: Record<string, number> = {};
-    portfolio.forEach(p => {
-      counts[p.type || 'Other'] = (counts[p.type || 'Other'] || 0) + 1;
-    });
-    return Object.entries(counts).map(([name, value]) => ({ name, value }));
-  }, [portfolio]);
+  useEffect(() => {
+    const anomalies = portfolio.filter((p: any) => p.status === 3);
+    if (anomalies.length > 0 && isOpen) {
+      const interval = setInterval(() => {
+        soundService.playSonar();
+      }, 15000);
+      return () => clearInterval(interval);
+    }
+  }, [portfolio, isOpen]);
 
-  const COLORS = ['#ffffff', '#a1a1aa', '#3b82f6', '#10b981', '#f59e0b'];
+  if (!isOpen) return null;
 
   return (
-    <AnimatePresence>
-      {isOpen && (
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          exit={{ opacity: 0, scale: 0.95 }}
-          className="fixed inset-0 z-[120] bg-black/95 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-8 overflow-hidden"
-        >
-          <div className="w-full max-w-6xl h-full flex flex-col gap-6">
-            {/* Header */}
-            <div className="flex justify-between items-center">
-              <div>
-                <h2 className="text-3xl font-display font-bold text-white tracking-tighter uppercase">Investor_Cabinet</h2>
-                <p className="text-xs font-mono text-primary/60 tracking-[0.3em] mt-1">Strategic Portfolio Analysis // Session_Active</p>
-              </div>
-              <button 
-                onClick={onClose}
-                className="p-3 bg-white/5 hover:bg-white/10 rounded-full border border-white/10 transition-colors"
-              >
-                <X className="w-6 h-6 text-white" />
-              </button>
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[150] bg-black flex flex-col font-mono"
+    >
+      {/* Top Bar */}
+      <div className="h-12 border-b border-primary/20 bg-black flex items-center justify-between px-6">
+        <div className="flex items-center gap-4">
+          <div className="w-6 h-6 bg-primary/20 rounded flex items-center justify-center border border-primary/40">
+            <Shield className="w-3.5 h-3.5 text-primary" />
+          </div>
+          <span className="text-[10px] font-bold text-white tracking-[0.4em] uppercase">Yardsoft Aegis // C&C Terminal</span>
+        </div>
+        <div className="flex items-center gap-6">
+          <div className="flex items-center gap-2">
+            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="text-[8px] text-emerald-500 uppercase tracking-widest">Secure Link Active</span>
+          </div>
+          <button onClick={onClose} className="p-1 hover:bg-white/10 rounded transition-colors">
+            <X className="w-4 h-4 text-slate-500" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main Layout */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Left Column: Navigation & Tree */}
+        <div className="w-64 border-r border-white/10 flex flex-col bg-[#050505]">
+          <div className="p-6 space-y-8">
+            <div className="space-y-2">
+              <p className="text-[8px] text-slate-600 uppercase tracking-widest font-bold">Main Modules</p>
+              <nav className="space-y-1">
+                {[
+                  { id: 'overview', label: 'Strategic Overview', icon: LayoutDashboard },
+                  { id: 'matrix', label: 'Asset Matrix', icon: Database },
+                  { id: 'districts', label: 'Tactical Districts', icon: Hexagon },
+                  { id: 'warroom', label: 'Syndicate War Room', icon: Users },
+                  { id: 'market', label: 'Secondary Exchange', icon: ShoppingCart },
+                  { id: 'scenarios', label: 'Scenario Builder', icon: Zap },
+                  { id: 'audit', label: 'Black Box Recorder', icon: History },
+                  { id: 'settings', label: 'Security Config', icon: Settings }
+                ].map(item => (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveModule(item.id as any)}
+                    className={cn("w-full flex items-center gap-3 px-3 py-2 rounded text-[9px] font-bold uppercase tracking-wider transition-all",
+                      activeModule === item.id ? "bg-primary text-black" : "text-slate-500 hover:bg-white/5 hover:text-white"
+                    )}
+                  >
+                    <item.icon className="w-3.5 h-3.5" />
+                    {item.label}
+                  </button>
+                ))}
+              </nav>
             </div>
 
-            <div className="flex-1 overflow-y-auto pr-2 scrollbar-hide space-y-6">
-              {/* Top Metrics Grid */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                {[
-                  { label: 'Total Capital', value: `$${(balance + portfolioValue).toLocaleString()}`, icon: Wallet, color: 'text-white' },
-                  { label: 'Portfolio Value', value: `$${portfolioValue.toLocaleString()}`, icon: Building2, color: 'text-primary' },
-                  { label: 'Est. Monthly Yield', value: `$${(totalYield * 12).toLocaleString()}`, icon: TrendingUp, color: 'text-secondary' },
-                  { label: 'Average ROI', value: `${avgRoi.toFixed(1)}%`, icon: Activity, color: 'text-emerald-400' }
-                ].map((m, i) => (
-                  <motion.div 
-                    key={i}
-                    initial={{ opacity: 0, y: 20 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: i * 0.1 }}
-                    className="bg-white/5 border border-white/10 rounded-2xl p-6 relative overflow-hidden group"
-                  >
-                    <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                      <m.icon className="w-12 h-12" />
-                    </div>
-                    <p className="text-[10px] font-mono text-slate-500 uppercase tracking-widest mb-2">{m.label}</p>
-                    <p className={cn("text-2xl font-display font-bold", m.color)}>{m.value}</p>
-                    <div className="mt-4 h-1 w-full bg-white/5 rounded-full overflow-hidden">
-                      <motion.div 
-                        initial={{ width: 0 }}
-                        animate={{ width: '70%' }}
-                        className={cn("h-full", m.color.replace('text-', 'bg-'))}
-                      />
-                    </div>
-                  </motion.div>
-                ))}
-              </div>
-
-              {/* Charts Grid */}
-              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                {/* Performance Chart */}
-                <div className="lg:col-span-2 bg-white/5 border border-white/10 rounded-2xl p-6">
-                  <div className="flex justify-between items-center mb-6">
-                    <h3 className="text-xs font-mono text-white uppercase tracking-widest flex items-center gap-2">
-                      <TrendingUp className="w-4 h-4 text-primary" />
-                      Portfolio_Performance
-                    </h3>
-                    <div className="flex gap-2">
-                      <span className="px-2 py-1 bg-primary/20 text-primary text-[8px] font-bold rounded uppercase">Real-time</span>
-                    </div>
-                  </div>
-                  <div className="h-[300px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <AreaChart data={history}>
-                        <defs>
-                          <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="5%" stopColor="var(--primary-accent)" stopOpacity={0.3}/>
-                            <stop offset="95%" stopColor="var(--primary-accent)" stopOpacity={0}/>
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
-                        <XAxis 
-                          dataKey="time" 
-                          stroke="rgba(255,255,255,0.3)" 
-                          fontSize={8} 
-                          tickLine={false} 
-                          axisLine={false}
-                        />
-                        <YAxis 
-                          stroke="rgba(255,255,255,0.3)" 
-                          fontSize={8} 
-                          tickLine={false} 
-                          axisLine={false}
-                          tickFormatter={(value) => `$${value}`}
-                        />
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
-                          itemStyle={{ color: '#fff' }}
-                        />
-                        <Area 
-                          type="monotone" 
-                          dataKey="value" 
-                          stroke="var(--primary-accent)" 
-                          fillOpacity={1} 
-                          fill="url(#colorValue)" 
-                          strokeWidth={2}
-                        />
-                      </AreaChart>
-                    </ResponsiveContainer>
-                  </div>
-                </div>
-
-                {/* Asset Allocation */}
-                <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-                  <h3 className="text-xs font-mono text-white uppercase tracking-widest mb-6 flex items-center gap-2">
-                    <PieChartIcon className="w-4 h-4 text-secondary" />
-                    Asset_Allocation
-                  </h3>
-                  <div className="h-[250px] w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={assetDistribution.length > 0 ? assetDistribution : [{ name: 'None', value: 1 }]}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={60}
-                          outerRadius={80}
-                          paddingAngle={5}
-                          dataKey="value"
-                        >
-                          {assetDistribution.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: '#0f172a', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '8px', fontSize: '10px' }}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  </div>
-                  <div className="mt-4 space-y-2">
-                    {assetDistribution.map((entry, index) => (
-                      <div key={index} className="flex justify-between items-center">
-                        <div className="flex items-center gap-2">
-                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: COLORS[index % COLORS.length] }} />
-                          <span className="text-[10px] text-slate-400 uppercase tracking-wider">{entry.name}</span>
+            {activeModule === 'districts' && (
+              <div className="space-y-4">
+                <p className="text-[8px] text-slate-600 uppercase tracking-widest font-bold">Analyzed Sectors</p>
+                <div className="space-y-2 max-h-[400px] overflow-y-auto scrollbar-hide">
+                  {analyzedHexes.length === 0 ? (
+                    <p className="text-[8px] text-slate-700 italic">No tactical data decrypted...</p>
+                  ) : (
+                    analyzedHexes.map((hex, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setSelectedHex(hex)}
+                        className={cn(
+                          "w-full text-left p-2 rounded border transition-all",
+                          selectedHex?.hex === hex.hex 
+                            ? "bg-primary/20 border-primary/40 text-primary" 
+                            : "bg-white/5 border-white/5 text-slate-500 hover:border-white/10 hover:text-white"
+                        )}
+                      >
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[9px] font-bold font-mono">SEC_{hex.hex.slice(-6).toUpperCase()}</span>
+                          <span className="text-[7px] opacity-60">{hex.occupancy}%</span>
                         </div>
-                        <span className="text-[10px] font-mono text-white">{entry.value}</span>
-                      </div>
-                    ))}
-                  </div>
+                        <p className="text-[7px] truncate opacity-50">{hex.analysis.replace(/#/g, '').split('\n')[0].trim()}</p>
+                      </button>
+                    ))
+                  )}
                 </div>
               </div>
+            )}
 
-              {/* Bottom Section: Assets List */}
-              <div className="bg-white/5 border border-white/10 rounded-2xl p-6">
-                <h3 className="text-xs font-mono text-white uppercase tracking-widest mb-6 flex items-center gap-2">
-                  <Layers className="w-4 h-4 text-emerald-400" />
-                  Secured_Assets_Inventory
-                </h3>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left">
-                    <thead>
-                      <tr className="border-b border-white/5">
-                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Asset_ID</th>
-                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Type</th>
-                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Valuation</th>
-                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Yield</th>
-                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">ROI</th>
-                        <th className="pb-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-white/5">
-                      {portfolio.map((asset, i) => (
-                        <tr key={i} className="group hover:bg-white/5 transition-colors">
-                          <td className="py-4">
-                            <div className="flex flex-col">
-                              <span className="text-[10px] font-bold text-white flex items-center gap-2">
-                                {asset.title || `Asset_${asset.id}`}
-                                <span className="px-1.5 py-0.5 bg-secondary/10 border border-secondary/30 rounded text-[7px] text-secondary pulsate-glow-secondary">ID: {asset.id}</span>
-                              </span>
-                              <span className="text-[8px] font-mono text-slate-500 uppercase">{asset.address?.substring(0, 20)}...</span>
-                            </div>
-                          </td>
-                          <td className="py-4">
-                            <span className="text-[9px] px-2 py-0.5 bg-white/5 border border-white/10 rounded text-slate-400 uppercase">{asset.type || 'Standard'}</span>
-                          </td>
-                          <td className="py-4 text-[10px] font-mono text-white">${asset.cost?.toLocaleString()}</td>
-                          <td className="py-4 text-[10px] font-mono text-secondary">+${asset.yield?.toLocaleString()}/mo</td>
-                          <td className="py-4 text-[10px] font-mono text-emerald-400">{asset.roi}%</td>
-                          <td className="py-4">
-                            <div className="flex items-center gap-1.5">
-                              <div className="w-1 h-1 rounded-full bg-emerald-400 pulsate-glow" />
-                              <span className="text-[8px] font-mono text-emerald-400 uppercase">Active</span>
-                            </div>
-                          </td>
-                        </tr>
+            <div className="space-y-4">
+              <p className="text-[8px] text-slate-600 uppercase tracking-widest font-bold">Portfolio Tree</p>
+              <div className="space-y-2 pl-2 border-l border-white/5">
+                {['Sector_Alpha', 'Sector_Beta', 'Sector_Gamma'].map((sector, i) => (
+                  <div key={i} className="space-y-1">
+                    <div className="flex items-center gap-2 text-[8px] text-slate-400 uppercase">
+                      <ChevronRight className="w-2 h-2" />
+                      {sector}
+                    </div>
+                    <div className="pl-4 space-y-1">
+                      {portfolio.slice(0, 2).map((p, j) => (
+                        <div key={j} className="text-[7px] text-slate-600 hover:text-primary cursor-pointer transition-colors">
+                          OBJ_{p.id.toString().substring(0, 6)}
+                        </div>
                       ))}
-                      {portfolio.length === 0 && (
-                        <tr>
-                          <td colSpan={6} className="py-12 text-center text-slate-500 font-mono text-xs uppercase tracking-widest">
-                            No strategic assets secured in current session.
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
+                    </div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+        </div>
+
+        {/* Center Column: Main Terminal */}
+        <div className="flex-1 flex flex-col relative bg-[#0a0a0a]">
+          <div className="flex-1 p-8 overflow-y-auto scrollbar-hide">
+            {activeModule === 'overview' && <StrategicOverview portfolio={portfolio} balance={balance} portfolioValue={portfolioValue} performanceHistory={performanceHistory} />}
+            {activeModule === 'matrix' && <AssetMatrix portfolio={portfolio} onSelect={setSelectedAsset} onSelectAsset={onSelectAsset} onList={onListOnMarket} />}
+            {activeModule === 'warroom' && <SyndicateWarRoom />}
+            {activeModule === 'market' && <SecondaryMarket marketOrders={marketOrders} onBuy={onBuyFromMarket} portfolio={portfolio} user={user} />}
+            {activeModule === 'districts' && (
+              <div className="space-y-8">
+                <div className="flex justify-between items-center border-b border-white/10 pb-4">
+                  <div>
+                    <h3 className="text-sm font-mono text-white uppercase tracking-[0.2em] flex items-center gap-3">
+                      <Hexagon className="w-4 h-4 text-primary animate-pulse" />
+                      Tactical District Analytics // Hive_Mind_Core
+                    </h3>
+                    <p className="text-[8px] text-slate-500 uppercase mt-1 tracking-widest font-bold">Deep Sector Intelligence & Tenant Profile Reconstruction</p>
+                  </div>
+                </div>
+
+                {!selectedHex ? (
+                  <div className="h-96 flex flex-col items-center justify-center text-center p-12 space-y-4">
+                    <div className="w-20 h-20 bg-white/5 rounded-full flex items-center justify-center border border-white/10">
+                      <Cpu className="w-10 h-10 text-slate-700 animate-pulse" />
+                    </div>
+                    <div>
+                      <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">No Sector Selected</h4>
+                      <p className="text-[8px] text-slate-600 mt-1 uppercase tracking-tighter">Select a decrypted sector from the sidebar to view individualized analytics</p>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                    <div className="lg:col-span-2 space-y-6">
+                      <div className="p-8 rounded-2xl bg-slate-950 border border-primary/20 shadow-2xl relative overflow-hidden">
+                         <div className="absolute top-0 right-0 p-4 opacity-5">
+                            <Hexagon className="w-40 h-40 text-primary" />
+                         </div>
+                         <div className="relative">
+                            <div className="flex items-center gap-3 mb-6">
+                               <div className="px-3 py-1 bg-primary/20 border border-primary/40 rounded text-[10px] font-bold text-primary uppercase tracking-widest">
+                                  Sector_{selectedHex.hex.slice(-6).toUpperCase()}
+                               </div>
+                               <div className="h-px flex-1 bg-white/10" />
+                               <span className="text-[8px] text-slate-500 font-mono tracking-widest uppercase">Analysis_V4.0</span>
+                            </div>
+
+                            <div className="markdown-body detailed-cabinet-analysis text-slate-300 leading-relaxed font-sans mt-4">
+                               <Markdown>{selectedHex.analysis}</Markdown>
+                            </div>
+                         </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="p-6 rounded-xl bg-white/5 border border-white/10">
+                           <h5 className="text-[10px] font-bold text-slate-500 uppercase mb-4 tracking-widest">Growth Projection</h5>
+                           <div className="h-32">
+                              <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart data={[
+                                  { name: 'Q1', val: 20 },
+                                  { name: 'Q2', val: 35 },
+                                  { name: 'Q3', val: 25 },
+                                  { name: 'Q4', val: 45 },
+                                ]}>
+                                  <defs>
+                                    <linearGradient id="colorVal" x1="0" y1="0" x2="0" y2="1">
+                                      <stop offset="5%" stopColor="var(--primary-accent-rgb)" stopOpacity={0.3}/>
+                                      <stop offset="95%" stopColor="var(--primary-accent-rgb)" stopOpacity={0}/>
+                                    </linearGradient>
+                                  </defs>
+                                  <Area type="monotone" dataKey="val" stroke="var(--primary-accent)" fillOpacity={1} fill="url(#colorVal)" />
+                                </AreaChart>
+                              </ResponsiveContainer>
+                           </div>
+                        </div>
+                        <div className="p-6 rounded-xl bg-white/5 border border-white/10">
+                           <h5 className="text-[10px] font-bold text-slate-500 uppercase mb-4 tracking-widest">Saturation Level</h5>
+                           <div className="flex flex-col items-center justify-center h-32 space-y-4">
+                              <div className="relative w-24 h-24">
+                                 <svg className="w-full h-full" viewBox="0 0 36 36">
+                                    <path className="text-white/5" strokeDasharray="100, 100" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" stroke="currentColor" strokeWidth="2" fill="none" />
+                                    <motion.path 
+                                      initial={{ strokeDasharray: "0, 100" }}
+                                      animate={{ strokeDasharray: `${selectedHex.occupancy}, 100` }}
+                                      className="text-primary" 
+                                      d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831" 
+                                      stroke="currentColor" strokeWidth="2" strokeLinecap="round" fill="none" 
+                                    />
+                                 </svg>
+                                 <div className="absolute inset-0 flex flex-col items-center justify-center leading-none">
+                                    <span className="text-xl font-bold font-mono text-white">{selectedHex.occupancy}%</span>
+                                    <span className="text-[6px] text-slate-500 uppercase mt-1">Saturated</span>
+                                 </div>
+                              </div>
+                           </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-6">
+                       <div className="p-6 rounded-xl bg-white/5 border border-white/10 space-y-6">
+                          <h5 className="text-[10px] font-bold text-white uppercase tracking-widest border-b border-white/10 pb-2">Sector Identity</h5>
+                          <div className="space-y-4">
+                             <div>
+                                <p className="text-[7px] text-slate-500 uppercase mb-1">H3 Index</p>
+                                <p className="text-xs font-mono text-slate-200">{selectedHex.hex}</p>
+                             </div>
+                             <div className="grid grid-cols-2 gap-4">
+                                <div>
+                                   <p className="text-[7px] text-slate-500 uppercase mb-1">Density</p>
+                                   <div className="flex items-center gap-2">
+                                      <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden">
+                                         <div className="h-full bg-emerald-500" style={{ width: `${selectedHex.occupancy}%` }} />
+                                      </div>
+                                   </div>
+                                </div>
+                                <div>
+                                   <p className="text-[7px] text-slate-500 uppercase mb-1">Yield Value</p>
+                                   <p className="text-xs font-mono text-emerald-400">High</p>
+                                </div>
+                             </div>
+                             <div>
+                                <p className="text-[7px] text-slate-500 uppercase mb-1">Last Analysis</p>
+                                <div className="flex items-center gap-2 text-[10px] text-slate-400">
+                                   <Clock className="w-3 h-3" />
+                                   {new Date(selectedHex.timestamp).toLocaleString()}
+                                </div>
+                             </div>
+                          </div>
+                       </div>
+
+                       <div className="p-6 rounded-xl bg-primary/5 border border-primary/20 space-y-4">
+                          <div className="flex items-center gap-2">
+                             <Target className="w-4 h-4 text-primary" />
+                             <h5 className="text-[10px] font-bold text-primary uppercase tracking-widest">Tactical Directives</h5>
+                          </div>
+                          <ul className="space-y-3">
+                             {[
+                               'Initialize tenant outreach program.',
+                               'Optimize supply chain nodes.',
+                               'Monitor local competition flux.'
+                             ].map((d, i) => (
+                               <li key={i} className="flex gap-2 items-start">
+                                  <div className="w-1 h-1 bg-primary rounded-full mt-1.5 flex-shrink-0" />
+                                  <p className="text-[9px] text-slate-300 leading-tight uppercase tracking-tighter">{d}</p>
+                               </li>
+                             ))}
+                          </ul>
+                       </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+            {activeModule === 'scenarios' && (
+              <div className="space-y-8">
+                <div className="flex justify-between items-center">
+                  <h3 className="text-[10px] font-mono text-white uppercase tracking-widest flex items-center gap-2">
+                    <Zap className="w-3 h-3 text-primary" />
+                    Scenario Builder // Stress_Test_Engine
+                  </h3>
+                  <div className="flex gap-4">
+                    <button className="px-4 py-2 bg-primary text-black text-[9px] font-bold uppercase tracking-widest rounded hover:bg-primary/90 transition-all">Run Simulation</button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-8">
+                  <div className="bg-white/5 border border-white/10 p-6 rounded-lg space-y-6">
+                    <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Stress Parameters</h4>
+                    <div className="space-y-6">
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-[8px] text-slate-500 uppercase">
+                          <span>Central Bank Key Rate</span>
+                          <span className="text-primary">21.0%</span>
+                        </div>
+                        <input type="range" min="5" max="30" defaultValue="21" className="w-full accent-primary bg-white/10 h-1 rounded-full appearance-none" />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-[8px] text-slate-500 uppercase">
+                          <span>Rental Income Shock</span>
+                          <span className="text-red-400">-15.0%</span>
+                        </div>
+                        <input type="range" min="-50" max="0" defaultValue="-15" className="w-full accent-red-400 bg-white/10 h-1 rounded-full appearance-none" />
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex justify-between text-[8px] text-slate-500 uppercase">
+                          <span>Vacancy Rate Increase</span>
+                          <span className="text-yellow-400">+10.0%</span>
+                        </div>
+                        <input type="range" min="0" max="50" defaultValue="10" className="w-full accent-yellow-400 bg-white/10 h-1 rounded-full appearance-none" />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-white/5 border border-white/10 p-6 rounded-lg space-y-6">
+                    <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Projected Impact</h4>
+                    <div className="space-y-4">
+                      <div className="p-4 bg-black/40 rounded border border-white/5">
+                        <p className="text-[8px] text-slate-500 uppercase mb-1">Portfolio NAV Impact</p>
+                        <p className="text-2xl font-bold text-red-400">-$1,240,000</p>
+                        <p className="text-[7px] text-red-400/60 uppercase mt-1">Critical Exposure in Sector_Beta</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div className="p-4 bg-black/40 rounded border border-white/5 text-center">
+                          <p className="text-[8px] text-slate-500 uppercase mb-1">Risk Assets</p>
+                          <p className="text-xl font-bold text-yellow-400">+5 Units</p>
+                        </div>
+                        <div className="p-4 bg-black/40 rounded border border-white/5 text-center">
+                          <p className="text-[8px] text-slate-500 uppercase mb-1">Default Prob.</p>
+                          <p className="text-xl font-bold text-red-400">12.4%</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                  <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Acquisition Impact Analysis</h4>
+                  <div className="flex items-center gap-8">
+                    <div className="flex-1 p-4 border border-dashed border-primary/20 rounded flex flex-col items-center justify-center gap-2 cursor-pointer hover:bg-primary/5 transition-all">
+                      <Plus className="w-6 h-6 text-primary/40" />
+                      <span className="text-[8px] text-primary/60 uppercase font-bold">Add Virtual Asset to Portfolio</span>
+                    </div>
+                    <div className="w-64 space-y-2">
+                      <div className="flex justify-between text-[8px] text-slate-500 uppercase">
+                        <span>Diversification Index</span>
+                        <span className="text-emerald-400">0.82</span>
+                      </div>
+                      <div className="h-1 bg-white/5 rounded-full overflow-hidden">
+                        <div className="h-full bg-emerald-400 w-[82%]" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+            {activeModule === 'audit' && (
+              <div className="space-y-6">
+                <h3 className="text-[10px] font-mono text-white uppercase tracking-widest flex items-center gap-2">
+                  <History className="w-3 h-3 text-secondary" />
+                  Black Box Recorder // Audit_Log
+                </h3>
+                <div className="space-y-2">
+                  {[...Array(10)].map((_, i) => (
+                    <div key={i} className="flex items-center justify-between p-3 bg-white/5 border border-white/5 rounded text-[8px] font-mono">
+                      <div className="flex items-center gap-4">
+                        <span className="text-slate-500">2026-04-14 14:15:22</span>
+                        <span className="text-white font-bold">ACCESS_GRANTED</span>
+                        <span className="text-slate-400">IP: 192.168.1.104 (Verified)</span>
+                      </div>
+                      <span className="text-primary/40">NODE_774</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {activeModule === 'settings' && (
+              <div className="max-w-2xl space-y-8">
+                <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                  <h4 className="text-[10px] text-white uppercase tracking-widest mb-6 flex items-center gap-2">
+                    <Key className="w-3 h-3 text-primary" />
+                    API Key Management
+                  </h4>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-3 bg-black/40 rounded border border-white/5">
+                      <div className="flex flex-col">
+                        <span className="text-[9px] text-white font-bold">Bloomberg_Terminal_Uplink</span>
+                        <span className="text-[7px] text-slate-500">Expires in 12 days</span>
+                      </div>
+                      <button className="text-[8px] text-red-400 uppercase font-bold">Revoke</button>
+                    </div>
+                    <button className="w-full py-2 border border-dashed border-primary/30 rounded text-[8px] text-primary uppercase font-bold hover:bg-primary/5 transition-all">+ Generate New Uplink Key</button>
+                  </div>
+                </div>
+                <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
+                  <h4 className="text-[10px] text-white uppercase tracking-widest mb-6 flex items-center gap-2">
+                    <Shield className="w-3 h-3 text-secondary" />
+                    Inheritance Protocol
+                  </h4>
+                  <div className="p-4 bg-secondary/5 border border-secondary/20 rounded">
+                    <p className="text-[9px] text-secondary/80 leading-relaxed">
+                      Protocol established. In case of 90 days inactivity, Read-Only access will be granted to verified beneficiary [ID: TRUST-882].
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Deep Dive Overlay */}
+          <AnimatePresence>
+            {selectedAsset && (
+              <DeepDiveTerminal asset={selectedAsset} portfolioDetailed={portfolio} onClose={() => setSelectedAsset(null)} />
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Right Column: Mini-map & Tactical */}
+        <div className="w-64 border-l border-white/10 flex flex-col bg-[#050505]">
+          <div className="p-6 space-y-8">
+            <div className="space-y-4">
+              <p className="text-[8px] text-slate-600 uppercase tracking-widest font-bold">Tactical Mini-map</p>
+              <div className="aspect-square bg-slate-900 rounded-lg border border-white/10 relative overflow-hidden">
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Radar className="w-12 h-12 text-primary/10 animate-spin-slow" />
+                </div>
+                <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-primary rounded-full pulsate-glow" />
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <p className="text-[8px] text-slate-600 uppercase tracking-widest font-bold">Tactical Feed</p>
+              <div className="space-y-3">
+                {[
+                  { type: 'alert', msg: 'ANOMALY: OBJ_4432', time: '2m ago' },
+                  { type: 'info', msg: 'LEASE_END: OBJ_8821', time: '1h ago' },
+                  { type: 'success', msg: 'VALUATION_UP: SECTOR_7', time: '4h ago' }
+                ].map((item, i) => (
+                  <div key={i} className="flex gap-3 items-start">
+                    <div className={cn("w-1 h-1 rounded-full mt-1.5", 
+                      item.type === 'alert' ? "bg-red-500" : item.type === 'success' ? "bg-emerald-500" : "bg-primary"
+                    )} />
+                    <div className="flex-1">
+                      <p className="text-[9px] text-white font-bold leading-tight">{item.msg}</p>
+                      <p className="text-[7px] text-slate-500 uppercase">{item.time}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Bottom Ticker */}
+      <TacticalTicker />
+    </motion.div>
   );
 };
 
@@ -793,24 +1983,49 @@ const TacticalHUD = ({ lat, lon }: { lat: number, lon: number }) => {
   const latInt = Math.abs(Math.floor(lat)).toString().padStart(2, '0');
   const lonInt = Math.abs(Math.floor(lon)).toString().padStart(2, '0');
   
-  const latDec = (Math.abs(lat) % 1).toFixed(4).substring(2);
-  const lonDec = (Math.abs(lon) % 1).toFixed(4).substring(2);
+  const latDec = (Math.abs(lat) % 1).toFixed(6).substring(2);
+  const lonDec = (Math.abs(lon) % 1).toFixed(6).substring(2);
+  
+  const [time, setTime] = useState(Date.now());
+  useEffect(() => {
+    const interval = setInterval(() => setTime(Date.now()), 100);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="fixed inset-0 pointer-events-none z-[55] flex items-center justify-center overflow-hidden">
       <div className="relative w-full h-full flex items-center justify-center">
+        {/* Scanning Coordinate Lines */}
+        <div className="absolute inset-0 opacity-10 pointer-events-none">
+          <div className="absolute top-0 left-1/2 w-px h-full bg-primary/40 transform -translate-x-1/2" />
+          <div className="absolute top-1/2 left-0 w-full h-px bg-primary/40 transform -translate-y-1/2" />
+          <div className="absolute inset-0 flex flex-col justify-around py-4">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="w-full h-px bg-primary/10" />
+            ))}
+          </div>
+          <div className="absolute inset-0 flex flex-row justify-around px-4">
+            {[...Array(10)].map((_, i) => (
+              <div key={i} className="w-px h-full bg-primary/10" />
+            ))}
+          </div>
+        </div>
+
         {/* Main Data Top */}
         <motion.div 
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           className="absolute top-[8%] sm:top-[12%] flex flex-col items-center gap-1 scale-75 sm:scale-100"
         >
-          <div className="w-16 h-px bg-primary/20" />
-          <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">Main Data</span>
-          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">{latInt}.<span className="text-xs opacity-50">{latDec}</span></span>
-          <div className="flex gap-6 mt-2 opacity-30">
-            <span className="text-[6px] font-mono text-primary tracking-widest">{lat.toFixed(6)}</span>
-            <span className="text-[6px] font-mono text-primary tracking-widest">A0. {latDec}. {lonDec}</span>
+          <div className="w-24 h-px bg-primary/40 shadow-[0_0_10px_rgba(255,255,255,0.5)]" />
+          <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">LAT_COORD [SYSTEM_A1]</span>
+          <span className="text-[24px] font-mono font-bold text-primary tracking-[0.2em] shadow-primary/20 drop-shadow-md">
+            {latInt}.<span className="text-sm opacity-60 font-medium">{latDec}</span>
+            <span className="ml-2 text-primary/40 text-[10px]">°N</span>
+          </span>
+          <div className="flex gap-6 mt-2 opacity-40">
+            <span className="text-[7px] font-mono text-primary tracking-widest">TS_{time % 1000000}</span>
+            <span className="text-[7px] font-mono text-primary tracking-widest">UNCERTAINTY: 0.00002m</span>
           </div>
         </motion.div>
 
@@ -820,40 +2035,76 @@ const TacticalHUD = ({ lat, lon }: { lat: number, lon: number }) => {
           animate={{ opacity: 1, y: 0 }}
           className="absolute bottom-[8%] sm:bottom-[12%] flex flex-col items-center gap-1 scale-75 sm:scale-100"
         >
-          <div className="flex gap-6 mb-2 opacity-30">
-            <span className="text-[6px] font-mono text-primary tracking-widest">{lon.toFixed(6)}</span>
-            <span className="text-[6px] font-mono text-primary tracking-widest">A0. {latDec}. {lonDec}</span>
+          <div className="flex gap-6 mb-2 opacity-40">
+            <span className="text-[7px] font-mono text-primary tracking-widest font-bold">UPLINK_STABLE</span>
+            <span className="text-[7px] font-mono text-primary tracking-widest">SEC_LEVEL_04</span>
           </div>
-          <span className="text-[18px] font-mono font-bold text-primary tracking-[0.2em]">{lonInt}.<span className="text-xs opacity-50">{lonDec}</span></span>
-          <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">Main Data</span>
-          <div className="w-16 h-px bg-primary/20" />
+          <span className="text-[24px] font-mono font-bold text-primary tracking-[0.2em] shadow-primary/20 drop-shadow-md">
+            {lonInt}.<span className="text-sm opacity-60 font-medium">{lonDec}</span>
+            <span className="ml-2 text-primary/40 text-[10px]">°E</span>
+          </span>
+          <span className="text-[10px] font-mono font-bold text-primary tracking-[0.5em] uppercase opacity-80">LON_COORD [SYSTEM_B2]</span>
+          <div className="w-24 h-px bg-primary/40 shadow-[0_0_10px_rgba(255,255,255,0.5)]" />
         </motion.div>
 
         {/* Center Reticle */}
         <motion.div 
           initial={{ opacity: 0, scale: 0.8 }}
-          animate={{ opacity: 0.4, scale: 1 }}
+          animate={{ opacity: 0.6, scale: 1 }}
           className="relative w-64 h-64 sm:w-96 sm:h-96 flex items-center justify-center"
         >
            <svg width="100%" height="100%" viewBox="0 0 200 200" className="absolute">
-             <circle cx="100" cy="100" r="45" stroke="white" strokeWidth="0.5" fill="none" strokeDasharray="1 3" className="opacity-50" />
-             <circle cx="100" cy="100" r="35" stroke="white" strokeWidth="1" fill="none" className="opacity-80" />
-             <circle cx="100" cy="100" r="1.5" fill="white" />
+             <defs>
+               <filter id="glow">
+                 <feGaussianBlur stdDeviation="2" result="coloredBlur"/>
+                 <feMerge>
+                   <feMergeNode in="coloredBlur"/>
+                   <feMergeNode in="SourceGraphic"/>
+                 </feMerge>
+               </filter>
+             </defs>
+
+             {/* Animated Pulsing Rings */}
+             <motion.circle 
+                cx="100" cy="100" r="45" 
+                stroke="white" strokeWidth="0.5" fill="none" 
+                strokeDasharray="1 3"
+                animate={{ r: [43, 47, 43], opacity: [0.3, 0.5, 0.3] }}
+                transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+             />
+             <motion.circle 
+                cx="100" cy="100" r="35" 
+                stroke="white" strokeWidth="1" fill="none"
+                filter="url(#glow)"
+                animate={{ scale: [0.98, 1.02, 0.98], opacity: [0.6, 0.9, 0.6] }}
+                transition={{ duration: 2, repeat: Infinity, ease: "easeInOut" }}
+             />
+             <circle cx="100" cy="100" r="1.5" fill="white" filter="url(#glow)" />
              
              {/* Cross lines */}
-             <line x1="100" y1="80" x2="100" y2="92" stroke="white" strokeWidth="1" />
-             <line x1="100" y1="108" x2="100" y2="120" stroke="white" strokeWidth="1" />
-             <line x1="80" y1="100" x2="92" y2="100" stroke="white" strokeWidth="1" />
-             <line x1="108" y1="100" x2="120" y2="100" stroke="white" strokeWidth="1" />
+             <g stroke="white" strokeWidth="1" filter="url(#glow)">
+               <line x1="100" y1="75" x2="100" y2="88" />
+               <line x1="100" y1="112" x2="100" y2="125" />
+               <line x1="75" y1="100" x2="88" y2="100" />
+               <line x1="112" y1="100" x2="125" y2="100" />
+             </g>
 
-             {/* Inner brackets */}
-             <path d="M85 85 L90 85 L90 90" stroke="white" strokeWidth="0.5" fill="none" />
-             <path d="M115 85 L110 85 L110 90" stroke="white" strokeWidth="0.5" fill="none" />
-             <path d="M85 115 L90 115 L90 110" stroke="white" strokeWidth="0.5" fill="none" />
-             <path d="M115 115 L110 115 L110 110" stroke="white" strokeWidth="0.5" fill="none" />
+             {/* Inner brackets - Pulsing Cyan/White */}
+             <g stroke="#00ffff" strokeWidth="1" fill="none" filter="url(#glow)">
+               <path d="M85 85 L90 85 L90 90" />
+               <path d="M115 85 L110 85 L110 90" />
+               <path d="M85 115 L90 115 L90 110" />
+               <path d="M115 115 L110 115 L110 110" />
+             </g>
+
+             {/* Degree ticks */}
+             {[0, 90, 180, 270].map(angle => (
+               <g key={angle} transform={`rotate(${angle} 100 100)`}>
+                 <line x1="100" y1="45" x2="100" y2="50" stroke="white" strokeWidth="0.5" opacity="0.5" />
+               </g>
+             ))}
            </svg>
         </motion.div>
-
         {/* Side Brackets */}
         <div className="absolute left-[5%] sm:left-[28%] h-64 w-24 hidden sm:flex flex-col justify-between py-8 opacity-20 scale-75 sm:scale-100">
            {[...Array(12)].map((_, i) => (
@@ -900,7 +2151,418 @@ const TacticalHUD = ({ lat, lon }: { lat: number, lon: number }) => {
   );
 };
 
+const StrategicReportModal = ({ isOpen, onClose, data, t }: any) => {
+  const [activePage, setActivePage] = useState('overview');
+  const reportRef = useRef<HTMLDivElement>(null);
+
+  if (!isOpen || !data) return null;
+
+  const handlePrint = () => {
+    window.print();
+  };
+
+  const pages = [
+    { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+    { id: 'specs', label: 'Specifications', icon: Building2 },
+    { id: 'swot', label: 'SWOT Analysis', icon: Target },
+    { id: 'traffic', label: 'Traffic & Flow', icon: Car },
+    { id: 'catchment', label: 'Catchment', icon: Users },
+    { id: 'competition', label: 'Competition', icon: Shield },
+    { id: 'market', label: 'Market Trends', icon: TrendingUp },
+  ];
+
+  const renderPage = () => {
+    switch (activePage) {
+      case 'overview':
+        return (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="relative h-64 rounded-2xl overflow-hidden border border-white/10 group">
+              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/20 to-transparent z-10" />
+              <img 
+                src={`https://picsum.photos/seed/${data.id}/1200/600`} 
+                alt="Asset Intelligence" 
+                className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                referrerPolicy="no-referrer"
+              />
+              <div className="absolute bottom-6 left-6 z-20">
+                <h1 className="text-3xl font-display font-bold text-white tracking-tight leading-none mb-2">
+                  {data.building.title || t.portfolio}
+                </h1>
+                <div className="flex items-center gap-2 text-primary font-mono text-xs tracking-widest uppercase">
+                  <MapPin className="w-3 h-3" />
+                  {data.building.address}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {[
+                { label: 'Strategic Score', value: '8.4', color: 'text-primary' },
+                { label: 'Risk Index', value: 'LOW', color: 'text-emerald-400' },
+                { label: 'Market Rank', value: '#12', color: 'text-secondary' },
+              ].map((stat, i) => (
+                <div key={i} className="bg-surface/40 p-5 rounded-2xl border border-border shadow-soft flex flex-col items-center">
+                  <p className="text-[9px] uppercase font-bold text-slate-500 tracking-widest mb-1">{stat.label}</p>
+                  <p className={cn("text-3xl font-mono font-bold", stat.color)}>{stat.value}</p>
+                </div>
+              ))}
+            </div>
+
+            <div className="bg-surface/40 p-6 rounded-2xl border border-border">
+              <h3 className="text-xs font-display font-bold text-white uppercase tracking-widest mb-4">Intelligence Briefing</h3>
+              <p className="text-sm text-slate-400 leading-relaxed font-sans">
+                {data.swot.market_context}
+              </p>
+            </div>
+          </div>
+        );
+      case 'swot':
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="space-y-6">
+              <div className="flex items-center gap-3 border-b border-emerald-500/20 pb-4">
+                <div className="w-8 h-8 rounded-lg bg-emerald-500/10 flex items-center justify-center">
+                  <TrendingUp className="w-5 h-5 text-emerald-400" />
+                </div>
+                <h3 className="text-lg font-display font-bold text-emerald-400 uppercase tracking-tight">Advantages</h3>
+              </div>
+              <div className="space-y-3">
+                {data.swot.advantages.map((adv: string, i: number) => (
+                  <div key={i} className="flex gap-3 items-start p-4 rounded-xl bg-emerald-500/5 border border-emerald-500/10 transition-all hover:bg-emerald-500/10">
+                    <CheckCircle2 className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                    <p className="text-sm text-slate-300 font-sans">{adv}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-6">
+              <div className="flex items-center gap-3 border-b border-red-500/20 pb-4">
+                <div className="w-8 h-8 rounded-lg bg-red-500/10 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-red-500" />
+                </div>
+                <h3 className="text-lg font-display font-bold text-red-500 uppercase tracking-tight">Vulnerabilities</h3>
+              </div>
+              <div className="space-y-3">
+                {data.swot.risks.map((risk: string, i: number) => (
+                  <div key={i} className="flex gap-3 items-start p-4 rounded-xl bg-red-500/5 border border-red-500/10 transition-all hover:bg-red-500/10">
+                    <AlertTriangle className="w-5 h-5 text-red-500 flex-shrink-0 mt-0.5" />
+                    <p className="text-sm text-slate-300 font-sans">{risk}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      case 'traffic':
+        return (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+               <div className="bg-surface/40 p-6 rounded-2xl border border-border">
+                 <div className="flex items-center justify-between mb-8">
+                   <h3 className="text-xs font-display font-bold text-white uppercase tracking-widest">Pedestrian Intelligence</h3>
+                   <span className="text-2xl font-mono font-bold text-primary">{data.traffic.pedestrian.toLocaleString()}</span>
+                 </div>
+                 <div className="h-64">
+                   <ResponsiveContainer width="100%" height="100%">
+                     <AreaChart data={[
+                       { time: '08:00', val: 320 },
+                       { time: '10:00', val: 560 },
+                       { time: '12:00', val: 890 },
+                       { time: '14:00', val: 780 },
+                       { time: '16:00', val: 920 },
+                       { time: '18:00', val: 1200 },
+                       { time: '20:00', val: 450 },
+                     ]}>
+                       <defs>
+                          <linearGradient id="colorPed" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="5%" stopColor="var(--primary-accent-rgb)" stopOpacity={0.3}/>
+                            <stop offset="95%" stopColor="var(--primary-accent-rgb)" stopOpacity={0}/>
+                          </linearGradient>
+                       </defs>
+                       <XAxis dataKey="time" stroke="#ffffff20" fontSize={10} tickLine={false} axisLine={false} />
+                       <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }} />
+                       <Area type="monotone" dataKey="val" stroke="var(--primary-accent)" fillOpacity={1} fill="url(#colorPed)" />
+                     </AreaChart>
+                   </ResponsiveContainer>
+                 </div>
+               </div>
+               <div className="bg-surface/40 p-6 rounded-2xl border border-border">
+                  <div className="flex items-center justify-between mb-8">
+                    <h3 className="text-xs font-display font-bold text-white uppercase tracking-widest">Vehicle Throughput</h3>
+                    <span className="text-2xl font-mono font-bold text-secondary">{data.traffic.vehicle.toLocaleString()}</span>
+                  </div>
+                  <div className="h-64">
+                   <ResponsiveContainer width="100%" height="100%">
+                     <BarChart data={[
+                       { day: 'Mon', val: 4200 },
+                       { day: 'Tue', val: 3800 },
+                       { day: 'Wed', val: 5100 },
+                       { day: 'Thu', val: 4600 },
+                       { day: 'Fri', val: 5800 },
+                       { day: 'Sat', val: 2100 },
+                       { day: 'Sun', val: 1800 },
+                     ]}>
+                       <XAxis dataKey="day" stroke="#ffffff20" fontSize={10} tickLine={false} axisLine={false} />
+                       <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }} />
+                       <Bar dataKey="val" fill="var(--secondary-accent)" radius={[4, 4, 0, 0]} />
+                     </BarChart>
+                   </ResponsiveContainer>
+                  </div>
+               </div>
+             </div>
+          </div>
+        );
+      case 'catchment':
+        return (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+             <div className="grid grid-cols-1 md:grid-cols-2 gap-8 items-center">
+                <div className="bg-surface/40 p-8 rounded-2xl border border-border text-center overflow-hidden relative">
+                   <div className="absolute inset-0 bg-primary/5 animate-pulse" />
+                   <div className="relative z-10">
+                     <Users className="w-12 h-12 text-primary mx-auto mb-4" />
+                     <h3 className="text-3xl font-mono font-bold text-white mb-2">{(data.catchment.tenMin / 1000).toFixed(1)}k</h3>
+                     <p className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Potential Daily Audience</p>
+                   </div>
+                </div>
+                <div className="space-y-6">
+                  <div className="p-5 rounded-2xl bg-white/5 border border-white/10">
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="text-xs font-bold text-slate-400">5 Min Walk Radius</span>
+                      <span className="text-sm font-mono text-primary font-bold">{data.catchment.fiveMin.toLocaleString()}</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                      <motion.div initial={{ width: 0 }} animate={{ width: '45%' }} className="h-full bg-primary" />
+                    </div>
+                  </div>
+                  <div className="p-5 rounded-2xl bg-white/5 border border-white/10">
+                    <div className="flex justify-between items-center mb-4">
+                      <span className="text-xs font-bold text-slate-400">10 Min Walk Radius</span>
+                      <span className="text-sm font-mono text-secondary font-bold">{data.catchment.tenMin.toLocaleString()}</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-white/5 rounded-full overflow-hidden">
+                      <motion.div initial={{ width: 0 }} animate={{ width: '85%' }} className="h-full bg-secondary" />
+                    </div>
+                  </div>
+                </div>
+             </div>
+          </div>
+        );
+      case 'competition':
+        return (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+             <div className="bg-surface/40 rounded-2xl border border-border overflow-hidden">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border bg-black/20">
+                      <th className="px-6 py-4 text-[10px] uppercase font-bold text-slate-500 tracking-widest">Entity Name</th>
+                      <th className="px-6 py-4 text-[10px] uppercase font-bold text-slate-500 tracking-widest">Proximity</th>
+                      <th className="px-6 py-4 text-[10px] uppercase font-bold text-slate-500 tracking-widest">Tactical Status</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {data.competitors.map((comp: any, i: number) => (
+                      <tr key={i} className="hover:bg-white/5 transition-colors">
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-3">
+                            <Building2 className="w-4 h-4 text-slate-500" />
+                            <span className="text-sm text-slate-200 font-medium">{comp.name}</span>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-slate-400 font-mono">{comp.distance}</td>
+                        <td className="px-6 py-4">
+                          <span className={cn(
+                            "px-2 py-0.5 rounded text-[10px] font-bold uppercase",
+                            comp.status === 'Active' ? "bg-emerald-500/10 text-emerald-400" :
+                            comp.status === 'Neutral' ? "bg-yellow-500/10 text-yellow-400" :
+                            "bg-slate-500/10 text-slate-500"
+                          )}>
+                            {comp.status}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+             </div>
+          </div>
+        );
+      case 'specs':
+        return (
+          <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="grid grid-cols-2 gap-6">
+              {[
+                { label: 'Asset Type', value: data.building.type || 'N/A' },
+                { label: 'Area (SQFT)', value: data.building.sqft?.toLocaleString() || 'N/A' },
+                { label: 'Year Built', value: data.building.yearBuilt || 'N/A' },
+                { label: 'Parking Slots', value: data.building.parkingSpaces || 'N/A' },
+                { label: 'Operational Status', value: 'Active' },
+                { label: 'Security Level', value: 'A-Grade' },
+              ].map((spec, i) => (
+                <div key={i} className="p-5 rounded-2xl bg-surface/40 border border-border">
+                  <p className="text-[9px] uppercase font-bold text-slate-500 tracking-widest mb-1">{spec.label}</p>
+                  <p className="text-base font-mono font-bold text-white">{spec.value}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      case 'market':
+        return (
+          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+             <div className="bg-surface/40 p-6 rounded-2xl border border-border">
+                <h3 className="text-xs font-display font-bold text-white uppercase tracking-widest mb-6">Price Trend Index</h3>
+                <div className="h-64">
+                   <ResponsiveContainer width="100%" height="100%">
+                     <LineChart data={[
+                       { year: '2021', price: 4500 },
+                       { year: '2022', price: 4800 },
+                       { year: '2023', price: 5200 },
+                       { year: '2024', price: 5100 },
+                       { year: '2025', price: 5400 },
+                       { year: '2026', price: 5900 },
+                     ]}>
+                       <XAxis dataKey="year" stroke="#ffffff20" fontSize={10} tickLine={false} axisLine={false} />
+                       <Tooltip contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #1e293b', borderRadius: '8px' }} />
+                       <Line type="monotone" dataKey="price" stroke="var(--primary-accent)" strokeWidth={3} dot={{ fill: 'var(--primary-accent)' }} />
+                     </LineChart>
+                   </ResponsiveContainer>
+                </div>
+             </div>
+             <div className="grid grid-cols-2 gap-6">
+                <div className="p-6 rounded-2xl bg-secondary/10 border border-secondary/20">
+                   <div className="flex items-center gap-2 mb-2">
+                      <TrendingUp className="w-4 h-4 text-secondary" />
+                      <span className="text-[10px] font-bold text-secondary uppercase tracking-widest">Growth Potential</span>
+                   </div>
+                   <p className="text-xl font-mono font-bold text-white">+12.4% / year</p>
+                </div>
+                <div className="p-6 rounded-2xl bg-primary/10 border border-primary/20">
+                   <div className="flex items-center gap-2 mb-2">
+                      <Target className="w-4 h-4 text-primary" />
+                      <span className="text-[10px] font-bold text-primary uppercase tracking-widest">Target ROI</span>
+                      </div>
+                   <p className="text-xl font-mono font-bold text-white">{data.building.roi || '18.5'}%</p>
+                </div>
+             </div>
+          </div>
+        );
+      default:
+        return (
+          <div className="flex flex-col items-center justify-center h-full py-20 text-slate-600">
+            <Activity className="w-12 h-12 mb-4 animate-pulse" />
+            <p className="font-mono text-xs uppercase tracking-widest">Data Stream Incomplete</p>
+          </div>
+        );
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-[250] bg-black/95 backdrop-blur-2xl flex flex-col font-mono overflow-hidden print:bg-white print:text-black">
+      {/* Header */}
+      <div className="h-16 border-b border-white/10 flex items-center justify-between px-8 bg-black/40 print:hidden">
+        <div className="flex items-center gap-4">
+          <div className="w-10 h-10 rounded-xl bg-primary/10 border border-primary/20 flex items-center justify-center">
+            <FileText className="w-5 h-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="text-sm font-bold text-white uppercase tracking-widest leading-none mb-1">
+              {t.reportTitle} // SECURE_NODE_REPORT
+            </h2>
+            <p className="text-[9px] text-slate-500 uppercase tracking-widest">
+              Level_5 Clearance Authorized // Timestamp {new Date(data.timestamp).toLocaleString()}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={handlePrint}
+            className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 text-xs font-bold uppercase tracking-widest"
+          >
+            <Printer className="w-4 h-4" />
+            {t.reportExport}
+          </button>
+          <button 
+            onClick={onClose}
+            className="p-2 hover:bg-red-500/20 text-slate-500 hover:text-red-400 rounded-lg transition-all"
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
+        {/* Sidebar Navigation - Responsive Header on mobile */}
+        <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 p-2 sm:p-4 md:p-6 space-y-4 md:space-y-8 flex-shrink-0 print:hidden overflow-x-auto overflow-y-hidden md:overflow-y-auto bg-slate-900/50">
+           <div className="flex md:flex-col gap-1.5 sm:gap-2 md:space-y-1 min-w-max md:min-w-0">
+              {pages.map(page => (
+                <button
+                  key={page.id}
+                  onClick={() => setActivePage(page.id)}
+                  className={cn(
+                    "flex-shrink-0 md:w-full flex items-center gap-2 sm:gap-3 px-3 md:px-4 py-2 md:py-3.5 rounded-xl text-[8px] sm:text-[9px] md:text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap lg:whitespace-normal text-left",
+                    activePage === page.id 
+                      ? "bg-primary text-black shadow-lg shadow-primary/20" 
+                      : "text-slate-500 hover:bg-white/5 hover:text-white border border-transparent hover:border-white/10"
+                  )}
+                >
+                  <page.icon className="w-3 h-3 sm:w-3.5 h-3.5 md:w-4 h-4" />
+                  <span className="truncate md:overflow-visible">{page.label}</span>
+                </button>
+              ))}
+           </div>
+
+           <div className="hidden md:block pt-8 border-t border-white/5">
+             <div className="p-4 rounded-2xl bg-primary/5 border border-primary/10">
+                <p className="text-[8px] uppercase font-bold text-primary mb-2">Security Hash</p>
+                <p className="text-[10px] font-mono text-slate-500 break-all leading-tight opacity-50">
+                  SH-R772-L19-V2026-X8842-P991
+                </p>
+             </div>
+           </div>
+        </div>
+
+        {/* Report Content Body */}
+        <div 
+          ref={reportRef}
+          className="flex-1 overflow-y-auto p-4 sm:p-8 md:p-12 lg:p-16 scrollbar-hide bg-[#020617] print:p-0 print:m-0 print:bg-white print:overflow-visible"
+        >
+          <div className="max-w-4xl mx-auto space-y-12 pb-20 print:space-y-8 print:p-0">
+            {/* Page Header (Print only) - Hide in screen */}
+            <div className="hidden print:block mb-8">
+               <div className="flex justify-between items-end border-b-2 border-primary pb-4">
+                 <div>
+                    <h1 className="text-2xl font-bold uppercase">{t.reportTitle}</h1>
+                    <p className="text-sm font-mono">{data.building.title}</p>
+                 </div>
+                 <div className="text-right">
+                    <p className="text-xs uppercase font-bold text-slate-500">{t.reportDate}</p>
+                    <p className="text-sm font-mono">{new Date(data.timestamp).toLocaleDateString()}</p>
+                 </div>
+               </div>
+            </div>
+
+            {renderPage()}
+            
+            {/* Print Footer */}
+            <div className="hidden print:mt-12 print:pt-4 print:border-t print:flex print:justify-between print:text-[10px] print:text-slate-400">
+               <span>Confidential Strategic Intelligence Report // Yardsoft Aegis</span>
+               <span>Page 1 of 1</span>
+               <span>Generated by {data.timestamp}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 export default function App() {
+  const [simulationYear, setSimulationYear] = useState(2026);
+  const [showRiskRadar, setShowRiskRadar] = useState(false);
+  const [showInfraPower, setShowInfraPower] = useState(false);
+  const [showInfraComm, setShowInfraComm] = useState(false);
+  const [showFutureProjects, setShowFutureProjects] = useState(false);
   const mapRef = React.useRef<MapRef>(null);
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
@@ -928,7 +2590,7 @@ export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isTyping, setIsTyping] = useState(false);
-  const [basemap, setBasemap] = useState('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
+  const [basemap, setBasemap] = useState<any>('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
   const [showBuildings, setShowBuildings] = useState(true);
   const [layersMenuOpen, setLayersMenuOpen] = useState(false);
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
@@ -943,6 +2605,19 @@ export default function App() {
   const [uiStyle, setUiStyle] = useState<'tactical' | 'professional'>('tactical');
   const [showLogo, setShowLogo] = useState(true);
   
+  // Sync theme and mode to document
+  useEffect(() => {
+    document.documentElement.setAttribute('data-mode', mode);
+    document.documentElement.setAttribute('data-theme', colorScheme);
+    
+    // Update basemap based on mode
+    if (mode === 'light') {
+      setBasemap('https://basemaps.cartocdn.com/gl/positron-gl-style/style.json');
+    } else {
+      setBasemap('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
+    }
+  }, [mode, colorScheme]);
+
   // Hide logo splash after delay
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -956,7 +2631,40 @@ export default function App() {
   const [searchMarker, setSearchMarker] = useState<{ lat: number, lon: number, name: string } | null>(null);
   const [pulse, setPulse] = useState(0);
   const [showTraffic, setShowTraffic] = useState(true);
+  const [showHexGrid, setShowHexGrid] = useState(false);
   const [trafficTime, setTrafficTime] = useState(0);
+  const [syndicates, setSyndicates] = useState<Syndicate[]>([]);
+  const [activeSyndicateId, setActiveSyndicateId] = useState<string | null>(null);
+  const [syndicateRoomOpen, setSyndicateRoomOpen] = useState(false);
+  const [marketOrders, setMarketOrders] = useState<SecondaryMarketOrder[]>([
+    {
+      id: 'EXCH-T7X2K9L',
+      assetId: '10254',
+      assetName: 'Neo-Center Tower A',
+      sellerUid: 'external-001',
+      sellerName: 'Global Real Estate Trust',
+      price: 185000000,
+      yieldPerCycle: 2450000,
+      status: 'OPEN',
+      createdAt: new Date().toISOString()
+    },
+    {
+      id: 'EXCH-B4V1M8N',
+      assetId: '10289',
+      assetName: 'Quantum Logistics Hub',
+      sellerUid: 'external-002',
+      sellerName: 'Apex Capital',
+      price: 72000000,
+      yieldPerCycle: 980000,
+      status: 'OPEN',
+      createdAt: new Date().toISOString()
+    }
+  ]);
+  const [marketOpen, setMarketOpen] = useState(false);
+  
+  const activeSyndicate = useMemo(() => 
+    activeSyndicateId ? syndicates.find(s => s.id === activeSyndicateId) : null,
+  [syndicates, activeSyndicateId]);
   const [roadsData, setRoadsData] = useState<any[]>([]);
   const [isTrafficLoading, setIsTrafficLoading] = useState(false);
 
@@ -1030,6 +2738,41 @@ export default function App() {
     return lines;
   }, []);
 
+  // Tactical Hex Districts Memo
+  const hexDistricts = useMemo(() => {
+    if (!showHexGrid) return [];
+    
+    try {
+      // Generate hexagons around current location
+      const resolution = viewState.zoom > 14 ? 9 : viewState.zoom > 11 ? 8 : 7;
+      const centerHex = h3.latLngToCell(viewState.latitude, viewState.longitude, resolution);
+      // Get a disk of hexagons around the center
+      const cells = h3.gridDisk(centerHex, 12);
+      
+      return cells.map(h => {
+        // Deterministic but random-looking data based on hex ID
+        const hash = h.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const value = (hash % 100);
+        const occupancy = (hash % 80) + 20;
+        
+        return {
+          hex: h,
+          value,
+          occupancy,
+          id: h,
+          name: `ZONE_${h.toUpperCase().slice(-4)}`,
+          type: 'DISTRICT_CELL',
+          height: 0, // District cells are flat
+          status: occupancy > 80 ? 2 : 1, // Strategic status
+          roi: occupancy.toFixed(1)
+        };
+      });
+    } catch (e) {
+      console.error("H3 Error:", e);
+      return [];
+    }
+  }, [showHexGrid, viewState.latitude, viewState.longitude, viewState.zoom]);
+
   // Data Only Mode Key Listener
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1049,9 +2792,23 @@ export default function App() {
     }
   }, [hoverInfo?.id]);
 
-  // Sound on Load
-  const handleMapLoad = useCallback(() => {
+  // Sound on Load & Map Initialization
+  const handleMapLoad = useCallback((e: any) => {
     soundService.playSonar();
+    
+    const map = e.target;
+    
+    // Add 3D Terrain source (Relief Support)
+    if (!map.getSource('terrain')) {
+      map.addSource('terrain', {
+        type: 'raster-dem',
+        url: 'https://demotiles.maplibre.org/terrain-tiles/tiles.json',
+        tileSize: 256
+      });
+    }
+
+    // Enable terrain relief globally
+    map.setTerrain({ source: 'terrain', exaggeration: 1.5 });
   }, []);
 
   // Sync User Profile from SQLite API
@@ -1148,6 +2905,9 @@ export default function App() {
   }, [selectedBuilding]);
   const [isCapturing, setIsCapturing] = useState<'photo' | 'video' | null>(null);
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportData, setReportData] = useState<any>(null);
 
   // Advanced Filters State
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -1231,12 +2991,12 @@ export default function App() {
   const lightingEffect = useMemo(() => {
     const ambientLight = new AmbientLight({
       color: [255, 255, 255],
-      intensity: 1.0
+      intensity: 0.6
     });
 
     const sunLight = new SunLight({
       color: [255, 255, 255],
-      intensity: 2.0,
+      intensity: 2.8,
       _shadow: true,
       timestamp: 0
     });
@@ -1333,6 +3093,7 @@ export default function App() {
         const res = await fetch('/api/v1/buildings', { headers });
         const data = await res.json();
         setBuildingsData(data);
+        soundService.playSonar();
       } catch (err) {
         console.error("Failed to fetch buildings:", err);
       }
@@ -1444,6 +3205,26 @@ export default function App() {
   }, []);
 
   const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
+
+  const portfolioDetailed = useMemo(() => {
+    if (!buildingsData || !portfolio) return [];
+    return portfolio.map(id => {
+      const building = buildingsData.features.find((f: any) => f.properties.id === id);
+      if (building) {
+        return { 
+          ...building.properties, 
+          id: building.properties.id,
+          latitude: building.geometry.coordinates[1], 
+          longitude: building.geometry.coordinates[0],
+          address: building.properties.address || 'Strategic Location',
+          yield: building.properties.yield || (building.properties.cost * 0.01),
+          roi: building.properties.roi || 12.5,
+          status: building.properties.status || 1
+        };
+      }
+      return null;
+    }).filter(Boolean);
+  }, [buildingsData, portfolio]);
   const [performanceHistory, setPerformanceHistory] = useState<{time: string, value: number}[]>([]);
 
   // Game State
@@ -1453,16 +3234,26 @@ export default function App() {
   // Track performance history
   useEffect(() => {
     if (performanceHistory.length === 0) {
-      setPerformanceHistory([{ time: new Date().toLocaleTimeString(), value: balance + portfolioValue }]);
+      // Initialize with mock historical data for better visualization
+      const now = Date.now();
+      const mockData = Array.from({ length: 15 }, (_, i) => {
+        const time = new Date(now - (15 - i) * 60000); // 1 minute intervals
+        const variance = (Math.random() - 0.5) * 500000;
+        return {
+          time: time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          value: (balance + portfolioValue) * (0.95 + (i * 0.003)) + variance
+        };
+      });
+      setPerformanceHistory(mockData);
     }
     
     const interval = setInterval(() => {
       setPerformanceHistory(prev => {
-        const newData = [...prev, { time: new Date().toLocaleTimeString(), value: balance + portfolioValue }];
-        if (newData.length > 20) return newData.slice(1);
+        const newData = [...prev, { time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }), value: balance + portfolioValue }];
+        if (newData.length > 30) return newData.slice(1);
         return newData;
       });
-    }, 10000);
+    }, 15000);
     
     return () => clearInterval(interval);
   }, [balance, portfolioValue]);
@@ -1620,28 +3411,201 @@ export default function App() {
       ROI: ${building.properties.roi !== undefined ? building.properties.roi + '%' : 'N/A'}
       Description: ${building.properties.description || 'No description available.'}
       
-      Please provide a concise analysis including:
-      1. Market Value assessment.
-      2. Monthly Yield potential.
-      3. ROI evaluation.
-      4. Overall investment recommendation (Buy, Hold, or Sell).
+      Please provide a highly professional and tactical strategic briefing including:
+      1. **Market Value Assessment**: Evaluation of the current valuation in the context of sectoral trends.
+      2. **Yield Potential**: Analysis of the monthly income stream and its stability.
+      3. **Strategic ROI Evaluation**: A deep dive into the return on investment relative to risk profiles.
+      4. **Tactical Recommendation**: A definitive action (ACQUIRE, HOLD, or LIQUIDATE) with a justification.
       
-      Keep the response professional and tactical, fitting a high-tech investment dashboard. Use markdown for formatting.`;
+      Use a "Command & Control" tone, concise and data-driven. Use markdown for high-quality formatting including bold headers and bullet points.`;
       
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: "gemini-3-flash-preview",
         contents: prompt
       });
       
       setAiAnalysis(response.text || "No analysis generated.");
     } catch (error) {
       console.error("AI Analysis failed:", error);
-      setAiAnalysis("Failed to perform AI analysis. Please try again later.");
+      setAiAnalysis("Failed to perform AI analysis. Strategic link severed. Please re-initialize.");
     } finally {
       setIsAnalyzing(false);
     }
   };
+
+  const handleGenerateReport = async (building: BuildingInfo) => {
+    if (!building) return;
+    setIsGeneratingReport(true);
+    setReportModalOpen(true);
+    
+    try {
+      // Simulate/Gather detailed report data
+      const prompt = `Generate a detailed SWOT analysis for a strategic investment report on this property:
+      Title: ${building.properties.title || 'Strategic Asset'}
+      Type: ${building.properties.type || 'Commercial'}
+      Address: ${building.properties.address || 'Classified'}
+      Specs: ${building.properties.sqft?.toLocaleString() || 'N/A'} sqft, Year Built: ${building.properties.yearBuilt || 'N/A'}
+      
+      Format as a JSON object with:
+      - advantages: string[] (top 5 strengths/opportunities)
+      - risks: string[] (top 3 threats/weaknesses)
+      - market_context: string (one paragraph about the surroundings)
+      
+      Do not include markdown code blocks, just the raw JSON.`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              advantages: { type: Type.ARRAY, items: { type: Type.STRING } },
+              risks: { type: Type.ARRAY, items: { type: Type.STRING } },
+              market_context: { type: Type.STRING }
+            },
+            required: ["advantages", "risks", "market_context"]
+          }
+        }
+      });
+
+      let swot;
+      try {
+        swot = JSON.parse(response.text || '{}');
+      } catch (e) {
+        swot = { 
+          advantages: ["High-precision geolocation tracking", "Secure tactical grid connectivity", "Authorized ROI potential"],
+          risks: ["Market volatility in anomalous sectors", "Geopolitical risk factors"],
+          market_context: "The asset is situated within a high-value strategic corridor with elevated demand for secure operational bases."
+        };
+      }
+
+      setReportData({
+        building: building.properties,
+        id: building.id,
+        swot,
+        timestamp: new Date().toISOString(),
+        traffic: {
+          pedestrian: Math.floor(Math.random() * 2000) + 500,
+          vehicle: Math.floor(Math.random() * 5000) + 1000
+        },
+        competitors: [
+          { name: "Alpha Sector Holdings", distance: "240m", status: "Active" },
+          { name: "Vanguard Realty", distance: "450m", status: "Neutral" },
+          { name: "Apex Logistics", distance: "1.2km", status: "Dormant" }
+        ],
+        catchment: {
+          fiveMin: Math.floor(Math.random() * 5000) + 2000,
+          tenMin: Math.floor(Math.random() * 15000) + 8000
+        }
+      });
+    } catch (error) {
+      console.error("Report generation failed:", error);
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
   const [createError, setCreateError] = useState<string | null>(null);
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [tacticalMenuOpen, setTacticalMenuOpen] = useState(false);
+  const [suggestion, setSuggestion] = useState<{ type: string, model: string, reason: string } | null>(null);
+  
+  const [selectedHex, setSelectedHex] = useState<any | null>(null);
+  const [hexAnalysis, setHexAnalysis] = useState<string | null>(null);
+  const [isHexAnalyzing, setIsHexAnalyzing] = useState(false);
+  const [analyzedHexes, setAnalyzedHexes] = useState<any[]>([]);
+
+  const handleAnalyzeHex = async (hexData: any) => {
+    if (!hexData) return;
+    setIsHexAnalyzing(true);
+    setHexAnalysis(null);
+    soundService.playSonar();
+    
+    try {
+      const coords = h3.cellToLatLng(hexData.hex);
+      const prompt = `Perform a tactical district analysis for Sector ${hexData.hex}.
+      Coordinates: ${coords[0].toFixed(4)}, ${coords[1].toFixed(4)}
+      Occupancy/Density: ${hexData.occupancy}%
+      Strategic Value: ${hexData.value}
+      
+      Identify the "Necessary Tenant" (missing business type or high-demand service) for this specific hexagonal cell. 
+      Consider urban logistics, residential needs, and retail saturation.
+      Output format: 
+      ### 🎯 NECESSARY TENANT: [Tenant Type]
+      **Strategic Justification:** [BRIEF explanation]
+      **Projected Impact:** [High/Medium/Low]
+      **Tactical Priority:** [1-10]`;
+      
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt
+      });
+      
+      const result = response.text || "Unable to decrypt district patterns.";
+      setHexAnalysis(result);
+
+      // Save to analyzed hexes if it doesn't already exist or update it
+      setAnalyzedHexes(prev => {
+        const existing = prev.findIndex(h => h.hex === hexData.hex);
+        const entry = { ...hexData, analysis: result, timestamp: new Date().toISOString() };
+        if (existing !== -1) {
+          const updated = [...prev];
+          updated[existing] = entry;
+          return updated;
+        }
+        return [entry, ...prev];
+      });
+    } catch (error) {
+      console.error("Hex Analysis Error:", error);
+      setHexAnalysis("Tactical link severed. Intelligence unavailable.");
+    } finally {
+      setIsHexAnalyzing(false);
+    }
+  };
+
+  const handleSuggestAssetType = async () => {
+    if (!newAsset.address || newAsset.cost <= 0) {
+      setCreateError("Address and Cost required for AI analysis.");
+      return;
+    }
+    
+    setIsSuggesting(true);
+    setSuggestion(null);
+    setCreateError(null);
+    
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.0-flash",
+        contents: `Given an asset at "${newAsset.address}" costing $${newAsset.cost}, determine the optimal 'Type' and 'Visual Model'.
+        Allowed Types: retail, office, warehouse, residential.
+        Allowed Models: house, apartment, warehouse, office.
+        Output JSON with keys: "type", "model", "reason" (brief justification).`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              type: { type: Type.STRING },
+              model: { type: Type.STRING },
+              reason: { type: Type.STRING }
+            },
+            required: ["type", "model", "reason"]
+          }
+        }
+      });
+      
+      const res = JSON.parse(response.text || '{}');
+      setSuggestion(res);
+      soundService.playSonar();
+    } catch (error) {
+      console.error("AI Suggestion Error:", error);
+      setCreateError("AI node unavailable. Manual entry required.");
+    } finally {
+      setIsSuggesting(false);
+    }
+  };
 
   const handleCreateAsset = async () => {
     if (!user) return;
@@ -1701,11 +3665,43 @@ export default function App() {
     }
   };
 
-  const basemaps = [
-    { id: 'dark', name: 'Dark Matter', url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json' },
-    { id: 'light', name: 'Positron', url: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json' },
-    { id: 'voyager', name: 'Voyager', url: 'https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json' },
-  ];
+  const basemaps = useMemo(() => [
+    { 
+      id: 'dark', 
+      name: t.basemapTerminal, 
+      url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
+      icon: <Terminal className="w-3.5 h-3.5" />
+    },
+    { 
+      id: 'light', 
+      name: t.basemapStandard, 
+      url: 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json',
+      icon: <MapIcon className="w-3.5 h-3.5" />
+    },
+    { 
+      id: 'satellite', 
+      name: t.basemapSatellite, 
+      url: {
+        version: 8,
+        sources: {
+          "raster-tiles": {
+            "type": "raster",
+            "tiles": ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+            "tileSize": 256,
+            "attribution": "Esri"
+          }
+        },
+        layers: [{
+          "id": "simple-tiles",
+          "type": "raster",
+          "source": "raster-tiles",
+          "minzoom": 0,
+          "maxzoom": 22
+        }]
+      },
+      icon: <Satellite className="w-3.5 h-3.5" />
+    },
+  ], [t]);
 
   // Gemini Initialization
   const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' }), []);
@@ -1723,9 +3719,59 @@ export default function App() {
         getColor: [gridBrightness]
       }
     } as any) : null,
+    showHexGrid ? new H3HexagonLayer({
+      id: 'tactical-hex-grid',
+      data: hexDistricts,
+      getHexagon: (d: any) => d.hex,
+      getFillColor: (d: any) => {
+        // Aesthetic: Dark Emerald for secure, Amber for active
+        if (d.occupancy > 80) return [255, 100, 0, 100]; // Amber/Alert
+        if (d.occupancy > 50) return [0, 255, 150, 60]; // Normal/Active
+        return [0, 150, 255, 40]; // Low activity/Quiet
+      },
+      getLineColor: [255, 255, 255, 30],
+      lineWidthMinPixels: 1,
+      filled: true,
+      stroked: true,
+      pickable: true,
+      extruded: false, // Keep it flat for "District Overview"
+      onHover: (info: any) => {
+        if (info.object) {
+          setHoverInfo({
+            id: info.object.name,
+            properties: info.object,
+            x: info.x,
+            y: info.y
+          });
+        } else {
+          setHoverInfo(null);
+        }
+      },
+      onClick: (info: any) => {
+        if (info.object) {
+          setSelectedHex(info.object);
+          handleAnalyzeHex(info.object);
+          setLastInteraction(Date.now());
+          setIsAutoRotating(false);
+        }
+      },
+      updateTriggers: {
+        getFillColor: [pulse] // Could animate if needed
+      }
+    }) : null,
+    createRiskRadarLayer(viewState.zoom, showRiskRadar, (info) => setHoverInfo(info)),
+    createStrategicNodesLayer(viewState.zoom, showRiskRadar, (info) => setHoverInfo(info)),
+    createInfrastructureTwinLayer(viewState.zoom, showInfraPower, 'power'),
+    createInfrastructureTwinLayer(viewState.zoom, showInfraComm, 'comm'),
+    createFutureProjectsLayer(viewState.zoom, showFutureProjects, simulationYear, (info) => setHoverInfo(info)),
     showBuildings && filteredBuildings ? createBuildingsLayer(
       filteredBuildings,
-      (info) => setHoverInfo(info),
+      (info) => {
+        if (info?.id && info.id !== hoverInfo?.id) {
+          soundService.playClick();
+        }
+        setHoverInfo(info);
+      },
       (info) => {
         setSelectedBuilding(info);
         setLastInteraction(Date.now());
@@ -1736,14 +3782,144 @@ export default function App() {
       hoverInfo?.id || null,
       viewState.zoom,
       buildingScanlineIntensity,
-      dataOnlyMode
+      dataOnlyMode,
+      investorCabinetOpen,
+      portfolio,
+      simulationYear
     ) : null,
     showTraffic && roadsData.length > 0 ? createTrafficLayer(
       roadsData,
       trafficTime,
       showTraffic
     ) : null
-  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, buildingScanlineIntensity, showTraffic, roadsData, trafficTime]);
+  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, hoverInfo, viewState.zoom, buildingScanlineIntensity, dataOnlyMode, investorCabinetOpen, portfolio, showTraffic, roadsData, trafficTime, showHexGrid, hexDistricts, showRiskRadar, showInfraPower, showInfraComm, showFutureProjects, simulationYear]);
+
+  const handleCreateSyndicate = (building: BuildingInfo) => {
+    if (!user) {
+      handleLogin();
+      return;
+    }
+    
+    // Check if building already in a syndicate
+    if (syndicates.some(s => s.buildingId === building.id)) {
+      alert("Syndicate already exists for this asset.");
+      return;
+    }
+
+    const newSyndicate: Syndicate = {
+      id: `SYND-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+      buildingId: building.id,
+      buildingName: building.properties.title || `Asset #${building.id}`,
+      targetAmount: building.properties.cost || 75000000,
+      raisedAmount: 0,
+      participants: [{ uid: user.uid, name: user.displayName || 'Lead Investor', amount: 0, role: 'Lead Broker' }],
+      status: 'OPEN',
+      adminFeeRate: 0.02,
+      legalFeeRate: 0.015,
+      createdAt: new Date().toISOString()
+    };
+    
+    setSyndicates(prev => [...prev, newSyndicate]);
+    setActiveSyndicateId(newSyndicate.id);
+    setSyndicateRoomOpen(true);
+    soundService.playClick();
+  };
+
+  const handleContributeToSyndicate = (syndicateId: string, amount: number) => {
+    if (!user || balance < amount) {
+      soundService.playDenied();
+      return;
+    }
+
+    setSyndicates(prev => prev.map(s => {
+      if (s.id === syndicateId) {
+        const existingParticipant = s.participants.find(p => p.uid === user.uid);
+        let newParticipants = [...s.participants];
+        if (existingParticipant) {
+          newParticipants = newParticipants.map(p => p.uid === user.uid ? { ...p, amount: p.amount + amount } : p);
+        } else {
+          newParticipants.push({ uid: user.uid, name: user.displayName || 'Bank Delegate', amount: amount, role: 'Syndicate Member' });
+        }
+        
+        const newRaised = s.raisedAmount + amount;
+        const newStatus = newRaised >= s.targetAmount ? 'FUNDED' : 'OPEN';
+        
+        return { ...s, raisedAmount: newRaised, participants: newParticipants, status: newStatus as any };
+      }
+      return s;
+    }));
+    
+    setBalance(prev => prev - amount);
+    soundService.playClick();
+  };
+
+  const handleListOnMarket = (asset: any) => {
+    if (!user) return;
+    
+    // Check if already on market
+    if (marketOrders.some(o => o.assetId === asset.id && o.status === 'OPEN')) {
+      alert("Asset already listed on secondary market.");
+      return;
+    }
+
+    const newOrder: SecondaryMarketOrder = {
+      id: `EXCH-${Math.random().toString(36).substr(2, 9).toUpperCase()}`,
+      assetId: asset.id,
+      assetName: asset.title || asset.properties?.title || `Asset #${asset.id}`,
+      sellerUid: user.uid,
+      sellerName: user.displayName || 'Strategic Seller',
+      price: (asset.cost || asset.properties?.cost || 0) * 0.95, // Default 5% discount for exit liquidity
+      yieldPerCycle: asset.yield || asset.properties?.yield || 0,
+      status: 'OPEN',
+      createdAt: new Date().toISOString()
+    };
+
+    setMarketOrders(prev => [newOrder, ...prev]);
+    soundService.playClick();
+    alert("Asset listed on Secondary Market. Awaiting counterparty matching.");
+  };
+
+  const handleBuyFromMarket = async (order: SecondaryMarketOrder) => {
+    if (!user || balance < order.price) {
+      soundService.playDenied();
+      return;
+    }
+
+    // 1. Update Order Status
+    setMarketOrders(prev => prev.map(o => o.id === order.id ? { ...o, status: 'SOLD' } : o));
+
+    // 2. Transfer Ownership (Remove from seller portfolio, add to buyer)
+    // Note: In this simulation, we'll just update the current user's portfolio and balance.
+    // If we had the seller's state accessible globally we'd update them too.
+    
+    const newBalance = balance - order.price;
+    const newPortfolio = [...portfolio, order.assetId];
+    
+    setBalance(newBalance);
+    setPortfolio(newPortfolio);
+    setTotalYield(prev => prev + order.yieldPerCycle);
+    setPortfolioValue(prev => prev + order.price);
+
+    // Sync to SQLite
+    if (user) {
+      try {
+        await fetch('/api/user/sync', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            uid: user.uid,
+            balance: newBalance,
+            portfolio: newPortfolio
+          })
+        });
+      } catch (err) {
+        console.error("SQL Save error:", err);
+      }
+    }
+
+    soundService.playClick();
+    alert(`Strategic Transfer Complete: ${order.assetName} integrated into portfolio.`);
+  };
 
   const handleBuyBuilding = async (id: number | string, cost: number, yieldAmount: number) => {
     if (balance >= cost && !portfolio.includes(id)) {
@@ -2065,62 +4241,110 @@ export default function App() {
           animate={{ opacity: 1 }}
           className="w-full max-w-lg space-y-8"
         >
-          <div className="space-y-2">
-            <div className="flex items-center gap-2 text-primary/60 text-xs">
-              <Terminal className="w-4 h-4" />
-              <span>SECURE UPLINK ESTABLISHED // NODE_774</span>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between text-[10px] text-primary/40 tracking-[0.3em]">
+              <span>[ YARDSOFT AEGIS v2.4.1 ]</span>
+              <span>SECURE_UPLINK_774</span>
             </div>
-            <div className="text-primary text-lg font-bold tracking-tighter">
+            
+            <div className="space-y-2 text-primary text-sm font-bold tracking-tighter">
+              <div className="flex items-center gap-2">
+                <span className="opacity-50">{">"}</span>
+                <span>ESTABLISHING SECURE HANDSHAKE...</span>
+              </div>
+              
+              {terminalStatus !== 'idle' && (
+                <motion.div 
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  className="flex items-center gap-2"
+                >
+                  <span className="opacity-50">{">"}</span>
+                  <span>CHALLENGE: 9X7A-2Q1L</span>
+                </motion.div>
+              )}
+
+              {terminalStatus === 'handshake' && (
+                <>
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex items-center gap-2"
+                  >
+                    <span className="opacity-50">{">"}</span>
+                    <span>RESPONSE: **************</span>
+                  </motion.div>
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.5 }}
+                    className="flex items-center gap-2 text-secondary"
+                  >
+                    <span className="opacity-50">{">"}</span>
+                    <span>BIOMETRIC SIGNATURE: VERIFIED</span>
+                  </motion.div>
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 1 }}
+                    className="flex items-center gap-2 text-emerald-400"
+                  >
+                    <span className="opacity-50">{">"}</span>
+                    <span>ACCESS GRANTED. LOADING GEOSPATIAL OVERLAY.</span>
+                  </motion.div>
+                </>
+              )}
+
               {terminalStatus === 'idle' && (
                 <div className="flex items-center gap-2">
-                  <span>{">"} ACCESS REQUEST // ENTER CLEARANCE CODE</span>
+                  <span className="opacity-50">{">"}</span>
+                  <span>ENTER CLEARANCE CODE:</span>
                   <motion.div 
                     animate={{ opacity: [1, 0] }}
                     transition={{ duration: 0.8, repeat: Infinity }}
-                    className="w-2 h-5 bg-primary"
+                    className="w-2 h-4 bg-primary"
                   />
                 </div>
-              )}
-              {terminalStatus === 'handshake' && (
-                <motion.div
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  className="text-secondary"
-                >
-                  HANDSHAKE COMPLETE. DECRYPTING GEOSPATIAL LAYER...
-                </motion.div>
               )}
             </div>
           </div>
 
           {terminalStatus === 'idle' && (
-            <input 
-              autoFocus
-              type="password"
-              value={terminalInput}
-              onChange={(e) => setTerminalInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  setTerminalStatus('handshake');
-                  setTimeout(() => {
-                    setIsAccessGranted(true);
-                    setTerminalStatus('granted');
-                  }, 2000);
-                }
-              }}
-              className="w-full bg-transparent border-b border-primary/30 outline-none text-primary text-2xl tracking-[0.5em] py-2 focus:border-primary transition-colors"
-            />
+            <div className="relative">
+              <input 
+                autoFocus
+                type="password"
+                value={terminalInput}
+                onChange={(e) => setTerminalInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    setTerminalStatus('handshake');
+                    soundService.playSonar();
+                    setTimeout(() => {
+                      setIsAccessGranted(true);
+                      setTerminalStatus('granted');
+                    }, 3000);
+                  }
+                }}
+                placeholder="YARD-XXXX-ALPHA"
+                className="w-full bg-transparent border-b border-primary/30 outline-none text-primary text-2xl tracking-[0.5em] py-2 focus:border-primary transition-colors placeholder:text-primary/10"
+              />
+              <div className="absolute -bottom-6 left-0 flex gap-4 text-[8px] text-primary/30 uppercase tracking-widest">
+                <span>Keystroke Dynamics: Active</span>
+                <span>Mouse Path: Tracking</span>
+              </div>
+            </div>
           )}
 
-          <div className="flex flex-col gap-1 text-[10px] text-slate-700 uppercase tracking-widest">
-            <p>Connection: Encrypted (AES-256)</p>
-            <p>Origin: {window.location.hostname}</p>
-            <p>Status: {terminalStatus === 'idle' ? 'Awaiting Credentials' : 'Authorizing...'}</p>
+          <div className="flex flex-col gap-1 text-[9px] text-slate-800 uppercase tracking-widest pt-8 border-t border-white/5">
+            <p>Connection: AES-256-GCM</p>
+            <p>Geo-IP Lock: Verified (London/UK)</p>
+            <p>Behavioral Pattern: 98.4% Match</p>
           </div>
         </motion.div>
 
         {/* Scanline Overlay */}
-        <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] z-10" />
+        <div className="absolute inset-0 pointer-events-none bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[length:100%_2px,3px_100%] z-10 opacity-50" />
       </div>
     );
   }
@@ -2136,8 +4360,8 @@ export default function App() {
           <div className="cinematic-vignette" />
           <div className="crt-flicker" />
           <div className="screen-scan-overlay" style={{ opacity: scanlineIntensity }} />
-          <div className="tactical-grid" />
-          <TacticalHUD lat={viewState.latitude} lon={viewState.longitude} />
+          {showGrid && <div className="tactical-grid" />}
+          {showGrid && <TacticalHUD lat={viewState.latitude} lon={viewState.longitude} />}
         </>
       )}
 
@@ -2213,23 +4437,35 @@ export default function App() {
       </AnimatePresence>
 
       {/* Top Navigation */}
-      <div className="absolute bottom-4 left-4 sm:top-4 sm:right-4 sm:bottom-auto sm:left-auto z-50 flex items-center gap-2">
+      <div className="fixed top-4 right-4 sm:top-6 sm:right-6 md:top-8 md:right-8 z-50 flex items-center gap-2 pointer-events-auto">
+        <button 
+          onClick={() => {
+            const newMode = mode === 'dark' ? 'light' : 'dark';
+            setMode(newMode);
+            soundService.playClick();
+          }}
+          className="apple-glass w-9 h-9 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center border border-white/10 text-slate-400 hover:text-primary transition-all shadow-lg"
+          title={`Switch to ${mode === 'dark' ? 'Light' : 'Dark'} Mode`}
+        >
+          {mode === 'dark' ? <Sun className="w-4.5 h-4.5 sm:w-5 sm:h-5" /> : <Moon className="w-4.5 h-4.5 sm:w-5 sm:h-5" />}
+        </button>
+
         {!user ? (
           <button 
             onClick={handleLogin}
-            className="apple-glass px-3 sm:px-4 py-2 rounded-xl flex items-center gap-2 border border-primary/30 text-primary hover:bg-primary/10 transition-all shadow-[0_0_15px_rgba(var(--primary-accent),0.2)] pointer-events-auto"
+            className="apple-glass h-9 sm:h-11 px-3 sm:px-5 rounded-xl flex items-center gap-2 border border-primary/30 text-primary hover:bg-primary/10 transition-all shadow-xl"
           >
             <Key className="w-4 h-4" />
-            <span className="text-[10px] font-bold uppercase tracking-widest hidden sm:inline">{t.signIn}</span>
+            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest hidden xs:inline">{t.signIn}</span>
           </button>
         ) : (
-          <div className="relative pointer-events-auto">
+          <div className="relative">
             <button 
               onClick={() => setProfileOpen(!profileOpen)}
-              className="w-10 h-10 rounded-xl overflow-hidden border-2 border-primary/50 shadow-[0_0_15px_rgba(var(--primary-accent),0.3)] hover:scale-105 transition-all active:scale-95"
+              className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl overflow-hidden border-2 border-primary/50 shadow-xl hover:scale-105 transition-all active:scale-95"
             >
               <img 
-                src={user.photoURL || "https://picsum.photos/seed/user/100/100"} 
+                src={user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`} 
                 alt="Profile" 
                 className="w-full h-full object-cover"
                 referrerPolicy="no-referrer"
@@ -2244,14 +4480,14 @@ export default function App() {
       </div>
 
       {/* Search Bar */}
-      <div className="absolute top-20 sm:top-4 left-1/2 -translate-x-1/2 z-40 w-full max-w-lg px-4 pointer-events-none">
+      <div className="absolute top-4 left-4 sm:left-6 md:left-8 z-40 w-[calc(100%-8rem)] sm:w-auto sm:min-w-[320px] md:min-w-[400px] pointer-events-none">
         <div className="flex flex-col gap-2 pointer-events-auto">
-          <div className="apple-glass rounded-xl flex items-center px-4 py-2 sm:py-2.5 group focus-within:ring-1 ring-primary/30 transition-all">
+          <div className="apple-glass rounded-xl flex items-center px-4 py-2.5 sm:py-3 group focus-within:ring-1 ring-primary/30 transition-all bg-slate-900/40 backdrop-blur-xl border border-white/5 shadow-2xl">
             <div className="relative flex items-center justify-center">
               <Search className={cn("w-4 h-4 text-slate-500 group-focus-within:text-primary transition-colors", isSearching && "opacity-0")} />
               {isSearching && (
                 <div className="absolute inset-0 flex items-center justify-center">
-                  <div className="w-3 h-3 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
+                  <div className="w-3.5 h-3.5 border-2 border-primary/30 border-t-primary rounded-full animate-spin" />
                 </div>
               )}
             </div>
@@ -2264,7 +4500,7 @@ export default function App() {
               }}
               onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
               placeholder={t.searchPlaceholder}
-              className="flex-1 bg-transparent border-none outline-none px-3 text-xs font-display tracking-widest text-slate-200 placeholder:text-slate-600"
+              className="flex-1 bg-transparent border-none outline-none px-3 text-[10px] sm:text-xs font-display tracking-[0.15em] text-slate-200 placeholder:text-slate-700 uppercase"
             />
             <div className="flex items-center gap-2">
               {(searchQuery.trim() || searchMarker) && (
@@ -2486,6 +4722,9 @@ export default function App() {
           onLoad={handleMapLoad}
           reuseMaps
         >
+          <NavigationControl position="top-right" />
+          <ScaleControl position="bottom-left" />
+          
           {selectedBuilding && 
            selectedBuilding.geometry && 
            selectedBuilding.geometry.coordinates && 
@@ -2620,6 +4859,7 @@ export default function App() {
 
       {/* UI Overlay */}
       <div className="absolute inset-0 pointer-events-none flex flex-col p-4 sm:p-6 z-20">
+
         {/* Project Info Panel (Three.js Interaction) */}
         <AnimatePresence>
           {hoveredProject && (
@@ -2668,7 +4908,7 @@ export default function App() {
                   </p>
                 </div>
 
-                <button className="w-full py-2.5 rounded-xl bg-primary text-slate-900 font-bold text-[10px] uppercase tracking-widest hover:bg-primary/90 transition-all shadow-[0_0_20px_rgba(var(--primary-accent),0.3)]">
+                <button className="w-full py-2.5 rounded-xl bg-primary text-base font-bold text-[10px] uppercase tracking-widest hover:bg-primary/90 transition-all shadow-[0_0_20px_rgba(var(--primary-accent),0.3)]">
                   Access Detailed Briefing
                 </button>
               </div>
@@ -2696,68 +4936,81 @@ export default function App() {
           <div className="scanline-anim" style={{ opacity: scanlineIntensity }} />
         </div>
         {/* Header */}
-        <header className="flex justify-between items-center gap-2 pointer-events-auto mb-4">
-          <div className="flex items-center gap-3">
+        <header className="flex items-center justify-between gap-4 pointer-events-auto mb-8 h-12 flex-shrink-0">
+          <div className="flex items-center gap-3 min-w-0">
             <button 
               onClick={() => setDashboardOpen(!dashboardOpen)}
               className={cn(
-                "w-9 h-9 apple-glass rounded-xl flex items-center justify-center border border-white/10 text-slate-400 hover:text-white transition-all shadow-xl",
+                "w-9 h-9 apple-glass rounded-xl flex-shrink-0 flex items-center justify-center border border-white/10 text-slate-400 hover:text-white transition-all shadow-xl",
                 dashboardOpen && "hidden sm:flex"
               )}
             >
               {dashboardOpen ? <ChevronUp className="-rotate-90 w-4 h-4" /> : <ChevronUp className="rotate-90 w-4 h-4" />}
             </button>
-            <div className="flex flex-col">
-              <h1 className="text-lg sm:text-xl font-bold tracking-tighter flex items-center gap-2 text-white">
-                <div className="hidden xs:flex w-7 h-7 bg-primary rounded-lg items-center justify-center shadow-[0_0_15px_rgba(var(--primary-accent),0.5)] border border-white/20">
+            <div className="flex flex-col min-w-0">
+              <h1 className="text-base sm:text-lg font-bold tracking-tight flex items-center gap-2 text-white truncate">
+                <div className="hidden xs:flex w-7 h-7 bg-primary rounded-lg items-center justify-center shadow-[0_0_15px_rgba(var(--primary-accent),0.5)] border border-white/20 flex-shrink-0">
                   <Building2 className="w-4 h-4" />
                 </div>
-                <span className="homm-heading text-xl sm:text-2xl truncate max-w-[120px] xs:max-w-none">{t.title}</span>
+                <span className="homm-heading text-lg sm:text-xl truncate leading-tight">{t.title}</span>
               </h1>
-              <p className="text-[7px] text-slate-500 mt-0.5 uppercase tracking-[0.3em] font-mono hidden xs:block">
+              <p className="text-[7px] text-slate-500 uppercase tracking-[0.2em] font-mono truncate hidden xs:block leading-none mt-0.5">
                 {t.subtitle}
               </p>
             </div>
           </div>
 
-          <div className="flex items-center gap-1.5 sm:gap-3">
+          <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
             <button 
               onClick={() => setInvestorCabinetOpen(true)}
-              className="flex sm:hidden apple-glass rounded-full p-2 items-center justify-center glass-hover transition-all"
+              className="flex sm:hidden apple-glass rounded-full p-2 items-center justify-center glass-hover transition-all bg-secondary/10 border border-secondary/20 shadow-lg"
             >
-              <LayoutDashboard className="w-3.5 h-3.5 text-primary" />
+              <LayoutDashboard className="w-3.5 h-3.5 text-secondary" />
             </button>
 
             <button 
               onClick={() => setInvestorCabinetOpen(true)}
-              className="hidden sm:flex apple-glass rounded-full px-4 py-2 items-center gap-3 glass-hover transition-all"
+              className="hidden sm:flex apple-glass rounded-full px-4 py-2 items-center gap-3 glass-hover transition-all bg-secondary/10 border border-secondary/20 hover:bg-secondary/20 active:scale-95 shadow-[0_0_20px_rgba(var(--secondary-accent),0.1)]"
             >
-              <LayoutDashboard className="w-3.5 h-3.5 text-primary" />
-              <div className="flex flex-col items-start">
-                <span className="text-[8px] text-slate-500 uppercase font-bold leading-none tracking-widest">Portfolio</span>
-                <span className="text-xs font-mono font-bold text-white">
-                  Analysis
-                </span>
+              <LayoutDashboard className="w-4 h-4 text-secondary" />
+              <div className="flex flex-col items-start leading-none group">
+                <span className="text-[7px] text-slate-500 uppercase font-bold tracking-widest leading-none group-hover:text-secondary/60 transition-colors">Strategic</span>
+                <span className="text-[10px] font-mono font-bold text-secondary mt-0.5">Terminal</span>
               </div>
             </button>
 
-            <div className="hidden md:flex apple-glass rounded-full px-4 py-2 items-center gap-3">
+            <div className="hidden md:flex apple-glass rounded-full px-4 py-2 items-center gap-3 border border-white/5 shadow-inner">
               <Wallet className="w-3.5 h-3.5 text-secondary" />
-              <div className="flex flex-col">
-                <span className="text-[8px] text-slate-500 uppercase font-bold leading-none tracking-widest">{t.treasury}</span>
-                <span className="text-xs font-mono font-bold text-secondary">
+              <div className="flex flex-col leading-none">
+                <span className="text-[8px] text-slate-500 uppercase font-bold tracking-widest leading-none">Treasury</span>
+                <span className="text-xs font-mono font-bold text-secondary mt-0.5">
                   ${balance.toLocaleString()}
                 </span>
               </div>
             </div>
 
-            <button 
-              onClick={handleExportCSV}
-              className="apple-glass rounded-full p-2 flex items-center justify-center glass-hover transition-all"
-              title="Export Map Data (CSV)"
-            >
-              <Download className="w-3.5 h-3.5 text-slate-400" />
-            </button>
+            <div className="flex items-center gap-1 apple-glass rounded-full border border-white/5 p-1">
+              <button 
+                onClick={handleExportCSV}
+                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 transition-all"
+                title="Export Map Data (CSV)"
+              >
+                <Download className="w-3.5 h-3.5" />
+              </button>
+              
+              <button 
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className={cn(
+                  "hidden lg:flex w-8 h-8 rounded-full items-center justify-center transition-all",
+                  sidebarOpen ? "text-primary bg-primary/10" : "text-slate-400 hover:text-white hover:bg-white/5"
+                )}
+                title="Toggle Strategic Filters"
+              >
+                <Filter className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        </header>
 
             <button 
               onClick={() => setSettingsOpen(!settingsOpen)}
@@ -3167,6 +5420,46 @@ export default function App() {
                           </div>
                         )}
 
+                        {/* Syndicated Transactions */}
+                        <div className="space-y-3 pt-2">
+                           <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Syndicated Transactions</h4>
+                           <div className="space-y-2">
+                             {syndicates.length > 0 ? syndicates.map(s => (
+                               <button 
+                                 key={s.id}
+                                 onClick={() => {
+                                   setActiveSyndicateId(s.id);
+                                   setSyndicateRoomOpen(true);
+                                   setProfileOpen(false);
+                                   soundService.playClick();
+                                 }}
+                                 className="w-full flex items-center justify-between p-3 rounded-2xl bg-white/5 border border-white/5 hover:bg-white/10 hover:border-secondary/30 transition-all text-left"
+                               >
+                                 <div className="flex items-center gap-3">
+                                   <div className="w-8 h-8 rounded-lg bg-secondary/10 flex items-center justify-center">
+                                     <Handshake className="w-4 h-4 text-secondary" />
+                                   </div>
+                                   <div>
+                                     <p className="text-xs font-bold text-white tracking-tight leading-none mb-1">{s.buildingName}</p>
+                                     <p className="text-[8px] text-slate-500 uppercase font-mono tracking-widest">{s.id}</p>
+                                   </div>
+                                 </div>
+                                 <div className="text-right">
+                                   <p className="text-[10px] font-mono font-bold text-secondary">
+                                     {((s.raisedAmount / s.targetAmount) * 100).toFixed(0)}%
+                                   </p>
+                                   <p className="text-[7px] text-slate-600 uppercase font-bold tracking-tighter">Funded</p>
+                                 </div>
+                               </button>
+                             )) : (
+                               <div className="p-8 rounded-2xl bg-white/5 border border-white/5 border-dashed flex flex-col items-center justify-center opacity-40">
+                                 <Users className="w-6 h-6 text-slate-600 mb-2" />
+                                 <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest">No Active Syndicates</p>
+                               </div>
+                             )}
+                           </div>
+                        </div>
+
                         {/* General Settings */}
                         <div className="space-y-2">
                           <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">System Settings</h4>
@@ -3187,28 +5480,184 @@ export default function App() {
                             </button>
                           </div>
                         </div>
+
+                        {/* Footer */}
+                        <div className="p-4 bg-black/40 border-t border-white/5 mt-auto">
+                          <button 
+                            onClick={handleLogout}
+                            className="w-full flex items-center justify-center gap-3 py-3 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all text-xs font-bold text-red-400 uppercase tracking-widest"
+                          >
+                            <LogOut className="w-4 h-4" />
+                            Terminate Session
+                          </button>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+
+      {/* Tactical & Strategic Command Sidebars */}
+      <div className="absolute left-4 sm:left-6 top-20 sm:top-24 flex flex-col gap-2 pointer-events-auto z-[40]">
+        
+        {/* Strategic Filters Sidebar */}
+        <div className="relative group">
+          <button 
+            onClick={() => {
+              setSidebarOpen(!sidebarOpen);
+              setTacticalMenuOpen(false);
+            }}
+            className={cn(
+              "apple-glass rounded-xl p-2.5 flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
+              sidebarOpen ? "bg-primary/20 border-primary/40 text-primary shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]" : "border-white/5 text-slate-400 glass-hover"
+            )}
+            title="Strategic Data Filters"
+          >
+            <Filter className={cn("w-4 h-4", sidebarOpen && "animate-pulse")} />
+          </button>
+
+          <AnimatePresence>
+            {sidebarOpen && (
+              <motion.div
+                initial={{ opacity: 0, x: -20, scale: 0.95 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: -20, scale: 0.95 }}
+                className="absolute left-full ml-3 top-0 pointer-events-auto origin-left"
+              >
+                <div className="apple-glass rounded-xl p-4 border border-white/10 shadow-2xl flex flex-col gap-4 w-52 overflow-hidden">
+                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
+                    <div className="flex items-center gap-2">
+                      <Filter className="w-3.5 h-3.5 text-primary" />
+                      <span className="text-[10px] font-bold text-white uppercase tracking-widest">Strategy_Gate</span>
+                    </div>
+                    <button onClick={() => setSidebarOpen(false)} className="p-1 hover:bg-white/5 rounded text-slate-500 hover:text-white transition-colors">
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Tactical_States</label>
+                    <div className="space-y-1">
+                      {[
+                        { id: 'stable', label: 'Stable', color: 'bg-emerald-500', glow: 'shadow-[0_0_10px_rgba(16,185,129,0.2)]' },
+                        { id: 'risk', label: 'Risk', color: 'bg-red-500', glow: 'shadow-[0_0_10px_rgba(239,68,68,0.2)]' },
+                        { id: 'anomalous', label: 'Anomalous', color: 'bg-slate-500', glow: 'shadow-[0_0_10px_rgba(107,114,128,0.2)]' }
+                      ].map(st => (
+                        <button
+                          key={st.id}
+                          onClick={() => toggleStatusFilter(st.id)}
+                          className={cn(
+                            "w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all text-[9px] font-bold uppercase tracking-wider",
+                            filters.statuses.includes(st.id) ? "bg-white/5 border-white/20 text-white" : "border-transparent text-slate-600 hover:bg-white/5"
+                          )}
+                        >
+                          <div className="flex items-center gap-2">
+                            <div className={cn("w-1.5 h-1.5 rounded-full", filters.statuses.includes(st.id) ? st.color : "bg-slate-800")} />
+                            {st.label}
+                          </div>
+                          {filters.statuses.includes(st.id) && <div className="w-1.5 h-1.5 bg-primary rounded-sm" />}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  
+                  <div className="space-y-2.5 pt-3 border-t border-white/5">
+                    <div className="flex justify-between items-center px-1">
+                      <label className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">ROI_Threshold</label>
+                      <span className="text-[9px] font-mono text-primary font-bold">{filters.minRoi}%</span>
+                    </div>
+                    <input 
+                      type="range"
+                      min="0"
+                      max="30"
+                      value={filters.minRoi}
+                      onChange={(e) => setFilters(prev => ({ ...prev, minRoi: parseInt(e.target.value) }))}
+                      className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                  </div>
+
+                  <button 
+                    onClick={() => setFilters({ statuses: ['stable', 'risk', 'anomalous'], minRoi: 0, owner: '' })}
+                    className="w-full py-1.5 mt-2 text-[8px] text-slate-500 hover:text-primary uppercase font-bold tracking-widest border border-white/5 rounded-lg transition-all"
+                  >
+                    Reset Intel
+                  </button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+
+        {/* Tactical Overlays Sidebar */}
+        <div className="relative group">
+          <button 
+            onClick={() => {
+              setTacticalMenuOpen(!tacticalMenuOpen);
+              setSidebarOpen(false);
+            }}
+            className={cn(
+              "apple-glass rounded-xl p-2.5 flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
+              tacticalMenuOpen ? "bg-secondary/20 border-secondary/40 text-secondary shadow-[0_0_15px_rgba(var(--secondary-accent),0.3)]" : "border-white/5 text-slate-400 glass-hover"
+            )}
+            title="Tactical Visualization"
+          >
+            <Eye className={cn("w-4 h-4", tacticalMenuOpen && "animate-pulse")} />
+          </button>
+
+          <AnimatePresence>
+            {tacticalMenuOpen && (
+              <motion.div
+                initial={{ opacity: 0, x: -20, scale: 0.95 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: -20, scale: 0.95 }}
+                className="absolute left-full ml-3 top-0 pointer-events-auto origin-left"
+              >
+                <div className="apple-glass rounded-xl p-3 border border-white/10 shadow-2xl flex flex-col gap-2 w-44">
+                  <div className="flex items-center gap-2 border-b border-white/5 pb-2 mb-1 px-1">
+                    <Cpu className="w-3 h-3 text-secondary" />
+                    <span className="text-[9px] font-bold text-white uppercase tracking-widest">Tactical_Link</span>
+                  </div>
+                  
+                  {[
+                    { id: 'grid', icon: Grid, active: showGrid, toggle: () => setShowGrid(!showGrid), label: t.tacticalGrid, color: 'primary' },
+                    { id: 'hex', icon: Hexagon, active: showHexGrid, toggle: () => {
+                        const newState = !showHexGrid;
+                        setShowHexGrid(newState);
+                        if (newState) soundService.playSonar();
+                        else soundService.playClick();
+                      }, label: t.tacticalCells, color: 'secondary' },
+                    { id: 'traffic', icon: Activity, active: showTraffic, toggle: () => setShowTraffic(!showTraffic), label: 'Live Traffic', color: 'emerald' },
+                    { id: 'buildings', icon: Building2, active: showBuildings, toggle: () => setShowBuildings(!showBuildings), label: '3D Extrusions', color: 'blue' }
+                  ].map(ctrl => (
+                    <button 
+                      key={ctrl.id}
+                      onClick={ctrl.toggle}
+                      className={cn(
+                        "w-full flex items-center justify-between p-2 rounded-lg border transition-all text-[9px] font-bold uppercase tracking-wider group",
+                        ctrl.active 
+                          ? `bg-${ctrl.color}-500/10 border-${ctrl.color}-500/30 text-${ctrl.color}-400` 
+                          : "border-transparent text-slate-500 hover:bg-white/5 hover:text-slate-300"
+                      )}
+                    >
+                      <div className="flex items-center gap-2">
+                        <ctrl.icon className="w-3.5 h-3.5" />
+                        {ctrl.label}
                       </div>
-                    </div>
+                      <div className={cn(
+                        "w-1.5 h-1.5 rounded-full transition-all",
+                        ctrl.active ? `bg-${ctrl.color}-500 shadow-[0_0_8px_rgba(var(--${ctrl.color}-accent),0.6)]` : "bg-slate-800"
+                      )} />
+                    </button>
+                  ))}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
 
-                    {/* Footer */}
-                    <div className="p-4 bg-black/40 border-t border-white/5">
-                      <button 
-                        onClick={handleLogout}
-                        className="w-full flex items-center justify-center gap-3 py-3 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all text-xs font-bold text-red-400 uppercase tracking-widest"
-                      >
-                        <LogOut className="w-4 h-4" />
-                        Terminate Session
-                      </button>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-          </div>
-        </header>
-
-        {/* Map Controls */}
-        <div className="absolute right-4 sm:right-6 top-20 sm:top-24 flex flex-col gap-3 pointer-events-auto">
+      {/* Map Controls */}
+      <div className="absolute right-4 sm:right-6 top-20 sm:top-24 flex flex-col gap-3 pointer-events-auto z-[40]">
           {/* Layers Control */}
           <div className="relative">
             <button 
@@ -3236,13 +5685,24 @@ export default function App() {
                       {basemaps.map(m => (
                         <button
                           key={m.id}
-                          onClick={() => setBasemap(m.url)}
+                          onClick={() => {
+                            setBasemap(m.url);
+                            soundService.playClick();
+                            if (m.id === 'satellite' || m.id === 'aerial') {
+                              setViewState(prev => ({
+                                ...prev,
+                                pitch: 60,
+                                bearing: -20,
+                                transitionDuration: 1000
+                              }));
+                            }
+                          }}
                           className={cn(
                             "flex items-center gap-3 p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
-                            basemap === m.url ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
+                            JSON.stringify(basemap) === JSON.stringify(m.url) ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
                           )}
                         >
-                          <MapIcon className="w-3.5 h-3.5" />
+                          {m.icon}
                           {m.name}
                         </button>
                       ))}
@@ -3295,6 +5755,25 @@ export default function App() {
                       </button>
 
                       <button
+                        onClick={() => {
+                          const newState = !showHexGrid;
+                          setShowHexGrid(newState);
+                          if (newState) soundService.playSonar();
+                          else soundService.playClick();
+                        }}
+                        className={cn(
+                          "flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
+                          showHexGrid ? "bg-secondary/20 text-secondary border border-secondary/30" : "text-slate-400 hover:bg-white/5"
+                        )}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Hexagon className="w-3.5 h-3.5" />
+                          {t.tacticalCells}
+                        </div>
+                        {showHexGrid ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
+
+                      <button
                         disabled
                         className="flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider text-slate-600 cursor-not-allowed"
                       >
@@ -3311,6 +5790,57 @@ export default function App() {
             </AnimatePresence>
           </div>
 
+          {/* Tactical Quick Toggles */}
+          <div className="flex flex-col gap-1.5">
+            <button 
+              onClick={() => setShowGrid(!showGrid)}
+              className={cn(
+                "apple-glass rounded-lg p-1.5 flex items-center justify-center transition-all border shadow-lg group relative",
+                showGrid ? "bg-primary/20 border-primary/40 text-primary shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]" : "border-white/5 text-slate-400 glass-hover"
+              )}
+              title={`${showGrid ? 'Hide' : 'Show'} ${t.tacticalGrid}`}
+            >
+              <Grid className="w-3.5 h-3.5" />
+              {showGrid && (
+                <motion.div 
+                  layoutId="active-indicator-grid"
+                  className="absolute -right-1 -top-1 w-1.5 h-1.5 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary-accent),0.8)]"
+                />
+              )}
+            </button>
+            <button 
+              onClick={() => {
+                const newState = !showHexGrid;
+                setShowHexGrid(newState);
+                if (newState) soundService.playSonar();
+                else soundService.playClick();
+              }}
+              className={cn(
+                "apple-glass rounded-lg p-1.5 flex items-center justify-center transition-all border shadow-lg group relative",
+                showHexGrid ? "bg-secondary/20 border-secondary/40 text-secondary shadow-[0_0_15px_rgba(var(--secondary-accent),0.3)]" : "border-white/5 text-slate-400 glass-hover"
+              )}
+              title={`${showHexGrid ? 'Hide' : 'Show'} ${t.tacticalCells}`}
+            >
+              <Hexagon className="w-3.5 h-3.5" />
+              {showHexGrid && (
+                <motion.div 
+                  layoutId="active-indicator-hex"
+                  className="absolute -right-1 -top-1 w-1.5 h-1.5 bg-secondary rounded-full shadow-[0_0_10px_rgba(var(--secondary-accent),0.8)]"
+                />
+              )}
+            </button>
+            <button 
+              onClick={() => {
+                 setInvestorCabinetOpen(true);
+                 soundService.playSonar();
+              }}
+              className="apple-glass rounded-lg p-1.5 flex items-center justify-center transition-all border shadow-lg group relative border-white/5 text-slate-400 glass-hover"
+              title="Secondary Asset Exchange"
+            >
+              <ShoppingCart className="w-3.5 h-3.5 hover:text-secondary transition-colors" />
+            </button>
+          </div>
+
           {/* Legend Toggle */}
           <button 
             onClick={() => {
@@ -3318,12 +5848,12 @@ export default function App() {
               if (!legendOpen && window.innerWidth < 640) setChatOpen(false);
             }}
             className={cn(
-              "apple-glass rounded-lg p-2 flex items-center justify-center transition-all border shadow-lg",
+              "apple-glass rounded-lg p-1.5 flex items-center justify-center transition-all border shadow-lg",
               legendOpen ? "bg-primary/20 border-primary/40 text-primary" : "border-white/5 text-slate-400 glass-hover"
             )}
             title="Toggle Map Legend"
           >
-            <Info className="w-4 h-4" />
+            <Info className="w-3.5 h-3.5" />
           </button>
 
           {/* Zoom Controls */}
@@ -3426,16 +5956,29 @@ export default function App() {
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-0.5">
                   <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.elevation}</p>
-                  <p className="text-xl font-mono text-[var(--text-main)]">{hoverInfo.properties.height}<span className="text-[10px] text-slate-500 ml-1">m</span></p>
+                  <p className="text-xl font-mono text-[var(--text-main)]">{hoverInfo.properties.height ?? 0}<span className="text-[10px] text-slate-500 ml-1">m</span></p>
                 </div>
                 
                 {/* Rule 2: RLS Protected Fields */}
-                {hoverInfo.properties.roi !== undefined ? (
+                {(hoverInfo.properties.roi !== undefined || (hoverInfo.properties as any).simulatedRoi !== undefined) ? (
                   <div className="space-y-0.5">
-                    <p className="text-[8px] text-primary uppercase font-bold flex items-center gap-1 tracking-widest">
-                      <TrendingUp className="w-2.5 h-2.5" /> Yield_ROI
+                    <p className={cn("text-[8px] uppercase font-bold flex items-center gap-1 tracking-widest", (hoverInfo.properties as any).isSimulated ? "text-amber-400" : "text-primary")}>
+                      <TrendingUp className="w-2.5 h-2.5" /> 
+                      {(hoverInfo.properties as any).isSimulated ? `Yield_${simulationYear}_FC` : 'Yield_ROI'}
                     </p>
-                    <p className="text-xl font-mono text-primary font-bold">{hoverInfo.properties.roi}<span className="text-[10px] ml-1">%</span></p>
+                    <p className={cn("text-xl font-mono font-bold", (hoverInfo.properties as any).isSimulated ? "text-amber-400" : "text-primary")}>
+                      {(hoverInfo.properties as any).simulatedRoi || hoverInfo.properties.roi}<span className="text-[10px] ml-1">%</span>
+                    </p>
+                    {(hoverInfo.properties as any).isSimulated && (
+                      <p className="text-[7px] text-slate-500 font-mono">BASE_ROI: {hoverInfo.properties.roi}%</p>
+                    )}
+                  </div>
+                ) : (hoverInfo.properties as any).purity ? (
+                  <div className="space-y-0.5">
+                    <p className="text-[8px] text-cyan-400 uppercase font-bold flex items-center gap-1 tracking-widest">
+                      <CheckSquare className="w-2.5 h-2.5" /> Legal_Purity
+                    </p>
+                    <p className="text-xl font-mono text-cyan-400 font-bold uppercase">{(hoverInfo.properties as any).purity}</p>
                   </div>
                 ) : (
                   <div className="space-y-0.5 opacity-50">
@@ -3447,40 +5990,151 @@ export default function App() {
                 )}
               </div>
 
-              {/* Game Mechanics: Cost & Buy Button */}
-              <div className="mt-4 pt-4 border-t border-border space-y-4">
-                <div className="flex justify-between items-end">
-                  <div className="space-y-0.5">
-                    <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.marketValue}</p>
-                    <p className="text-lg font-mono text-primary font-bold">${(hoverInfo.properties as any).cost?.toLocaleString()}</p>
-                  </div>
-                  <div className="space-y-0.5 text-right">
-                    <p className="text-[8px] text-secondary uppercase font-bold tracking-widest">{t.estRevenue}</p>
-                    <p className="text-xs font-mono text-secondary font-bold">+${(hoverInfo.properties as any).yield?.toLocaleString()}<span className="text-[9px] text-slate-500">/{t.cycle}</span></p>
-                  </div>
+              {/* Management/Description Section for non-buildings */}
+              {hoverInfo.properties.description && (
+                <div className="mt-3 p-3 bg-white/5 border border-white/10 rounded-lg">
+                  <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest mb-1 leading-tight">Tactical Analysis</p>
+                  <p className="text-[9px] text-slate-300 leading-relaxed tracking-tight italic">"{hoverInfo.properties.description}"</p>
                 </div>
+              )}
 
-                {portfolio.includes(hoverInfo.id) ? (
-                  <div className="w-full bg-secondary/10 border border-secondary/30 rounded-lg py-2.5 px-3 flex items-center justify-center gap-2 text-secondary text-[10px] font-display font-bold uppercase tracking-widest shadow-[0_0_15px_rgba(var(--secondary-accent),0.1)]">
-                    <CheckCircle2 className="w-3.5 h-3.5" />
-                    {t.owned}
+              {/* Institutional Strategic Data */}
+              {(showRiskRadar || showFutureProjects) && (
+                <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
+                   <div className="flex items-center gap-2 mb-2">
+                      <Shield className="w-3 h-3 text-red-500 animate-pulse" />
+                      <span className="text-[8px] font-bold text-white uppercase tracking-widest">
+                        {(hoverInfo.properties as any).type === 'FUTURE_PROJECT' ? 'Future Impact Analysis' : 'Risk Radar // Strategic Analysis'}
+                      </span>
+                   </div>
+                   
+                   {(hoverInfo.properties as any).type === 'FUTURE_PROJECT' ? (
+                     <>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <p className="text-[7px] text-slate-500 uppercase font-bold">Project_Timeline</p>
+                          <p className="text-[9px] text-white font-mono uppercase">
+                            {(hoverInfo.properties as any).startYear} - {(hoverInfo.properties as any).endYear}
+                          </p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[7px] text-slate-500 uppercase font-bold">Project_Status</p>
+                          <p className={cn("text-[9px] font-bold font-mono uppercase", 
+                            hoverInfo.properties.status === 2 ? "text-amber-400" : "text-emerald-400"
+                          )}>
+                            {hoverInfo.properties.status === 2 ? 'Under_Construction' : 'Operational'}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[7px] text-slate-500 uppercase font-bold">Estimated_Impact</p>
+                        <p className="text-[9px] text-primary font-mono font-bold uppercase">
+                          {(hoverInfo.properties as any).impact}
+                        </p>
+                      </div>
+                     </>
+                   ) : (hoverInfo.properties as any).type === 'LEGAL_RISK_ZONE' ? (
+                    <>
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <p className="text-[7px] text-slate-500 uppercase font-bold">Compliance_Index</p>
+                          <p className={cn("text-[9px] font-mono font-bold uppercase", 
+                            (hoverInfo.properties as any).compliance > 80 ? "text-emerald-400" : 
+                            (hoverInfo.properties as any).compliance > 50 ? "text-amber-400" : "text-red-400"
+                          )}>
+                            {(hoverInfo.properties as any).compliance}%
+                          </p>
+                        </div>
+                        <div className="space-y-1">
+                          <p className="text-[7px] text-slate-500 uppercase font-bold">Legal_Purity</p>
+                          <p className="text-[9px] text-white font-mono uppercase">{(hoverInfo.properties as any).purity}</p>
+                        </div>
+                      </div>
+                      <div className="space-y-1">
+                        <p className="text-[7px] text-slate-500 uppercase font-bold">Risk_Classification</p>
+                        <p className={cn("text-[9px] font-mono font-bold uppercase", 
+                          (hoverInfo.properties as any).risk === 'Critical' ? "text-red-500" : "text-white"
+                        )}>{(hoverInfo.properties as any).risk}</p>
+                      </div>
+                    </>
+                   ) : (
+                     <>
+                        <div className="grid grid-cols-2 gap-3">
+                           <div className="space-y-1">
+                             <p className="text-[7px] text-slate-500 uppercase font-bold">Ownership_Status</p>
+                             <p className="text-[9px] text-white font-mono break-all">{hoverInfo.properties.owner || 'Verified_Clear'}</p>
+                           </div>
+                           <div className="space-y-1">
+                             <p className="text-[7px] text-slate-500 uppercase font-bold">Sanctions_Resist</p>
+                             <p className={cn("text-[9px] font-bold font-mono uppercase", 
+                               (hoverInfo.properties as any).sanctions_resist === 'High' ? "text-emerald-400" : 
+                               (hoverInfo.properties as any).sanctions_resist === 'Medium' ? "text-amber-400" : 
+                               (hoverInfo.properties as any).sanctions_resist === 'Low' ? "text-orange-400" : 
+                               "text-red-500"
+                             )}>
+                               {(hoverInfo.properties as any).sanctions_resist || 'UNKNOWN'}
+                             </p>
+                           </div>
+                        </div>
+                        <div className="space-y-1">
+                           <p className="text-[7px] text-slate-500 uppercase font-bold">Legal Encumbrances</p>
+                           <p className={cn("text-[9px] font-mono uppercase", 
+                             !(hoverInfo.properties as any).encumbrances || (hoverInfo.properties as any).encumbrances === 'None' ? "text-emerald-400" : "text-amber-400"
+                           )}>
+                             {(hoverInfo.properties as any).encumbrances || 'NODE_CLEARANCE_PASSED'}
+                           </p>
+                        </div>
+                     </>
+                   )}
+                </div>
+              )}
+
+              {/* Game Mechanics: Cost & Buy Button */}
+              {hoverInfo.properties.cost !== undefined && (
+                <div className="mt-4 pt-4 border-t border-border space-y-4">
+                  <div className="flex justify-between items-end">
+                    <div className="space-y-0.5">
+                      <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">{t.marketValue}</p>
+                      <p className="text-lg font-mono text-primary font-bold">${(hoverInfo.properties as any).cost?.toLocaleString()}</p>
+                    </div>
+                    <div className="space-y-0.5 text-right">
+                      <p className="text-[8px] text-secondary uppercase font-bold tracking-widest">{t.estRevenue}</p>
+                      <p className="text-xs font-mono text-secondary font-bold">+${(hoverInfo.properties as any).yield?.toLocaleString()}<span className="text-[9px] text-slate-500">/{t.cycle}</span></p>
+                    </div>
                   </div>
-                ) : (
-                  <button 
-                    onClick={() => handleBuyBuilding(hoverInfo.id, (hoverInfo.properties as any).cost, (hoverInfo.properties as any).yield)}
-                    disabled={balance < (hoverInfo.properties as any).cost}
-                    className={cn(
-                      "w-full py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 text-[10px] font-display font-bold uppercase tracking-[0.2em] transition-all energy-border",
-                      balance >= (hoverInfo.properties as any).cost
-                        ? "bg-primary text-white hover:bg-primary/80 shadow-[0_0_20px_rgba(var(--primary-accent),0.4)] active:scale-[0.98]"
-                        : "bg-slate-800/50 text-slate-500 cursor-not-allowed border border-slate-700/50"
-                    )}
-                  >
-                    <ShoppingCart className="w-3.5 h-3.5" />
-                    {t.buyAsset}
-                  </button>
-                )}
-              </div>
+
+                  {portfolio.includes(hoverInfo.id) ? (
+                    <div className="w-full bg-secondary/10 border border-secondary/30 rounded-lg py-2.5 px-3 flex items-center justify-center gap-2 text-secondary text-[10px] font-display font-bold uppercase tracking-widest shadow-[0_0_15px_rgba(var(--secondary-accent),0.1)]">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      {t.owned}
+                    </div>
+                  ) : (
+                    <button 
+                      onClick={() => handleBuyBuilding(hoverInfo.id, (hoverInfo.properties as any).cost, (hoverInfo.properties as any).yield)}
+                      disabled={balance < (hoverInfo.properties as any).cost}
+                      className={cn(
+                        "w-full py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 text-[10px] font-display font-bold uppercase tracking-[0.2em] transition-all energy-border",
+                        balance >= (hoverInfo.properties as any).cost
+                          ? "bg-primary text-white hover:bg-primary/80 shadow-[0_0_20px_rgba(var(--primary-accent),0.4)] active:scale-[0.98]"
+                          : "bg-slate-800/50 text-slate-500 cursor-not-allowed border border-slate-700/50"
+                      )}
+                    >
+                      <ShoppingCart className="w-3.5 h-3.5" />
+                      {t.buyAsset}
+                    </button>
+                  )}
+                  
+                  {!portfolio.includes(hoverInfo.id) && (
+                    <button 
+                      onClick={() => handleCreateSyndicate(hoverInfo)}
+                      className="w-full py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 text-[10px] font-display font-bold uppercase tracking-[0.2em] transition-all bg-secondary/10 text-secondary border border-secondary/20 hover:bg-secondary/20 active:scale-[0.98]"
+                    >
+                      <Users className="w-3.5 h-3.5" />
+                      Form Syndicate
+                    </button>
+                  )}
+                </div>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -3596,6 +6250,99 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      {/* Hex Analytics Modal */}
+      <AnimatePresence>
+        {selectedHex && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-base/80 backdrop-blur-md">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.9, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.9, y: 20 }}
+              className="relative w-full max-w-lg apple-glass rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              <div className="p-4 border-b border-white/10 flex items-center justify-between bg-primary/5">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 rounded-lg bg-primary/20 flex items-center justify-center border border-primary/30">
+                    <Hexagon className="w-4 h-4 text-primary animate-pulse" />
+                  </div>
+                  <div>
+                    <h2 className="text-sm font-display font-bold text-white uppercase tracking-widest leading-none">
+                      Sector {selectedHex.hex.slice(-6).toUpperCase()} Analytics
+                    </h2>
+                    <p className="text-[8px] text-slate-500 font-mono mt-1 uppercase tracking-widest">District_Tactical_Intelligence</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setSelectedHex(null)}
+                  className="p-2 hover:bg-white/5 rounded-full text-slate-500 transition-colors"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-1 scrollbar-hide space-y-6">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 flex flex-col gap-1">
+                    <span className="text-[7px] text-slate-500 font-bold uppercase tracking-widest">Occupancy_Density</span>
+                    <div className="flex items-end gap-2">
+                       <span className="text-2xl font-mono font-bold text-primary">{selectedHex.occupancy}%</span>
+                       <div className="h-6 flex-1 bg-slate-900 rounded-full overflow-hidden mb-1 border border-white/5">
+                          <motion.div 
+                            initial={{ width: 0 }}
+                            animate={{ width: `${selectedHex.occupancy}%` }}
+                            className="h-full bg-primary/50 shadow-[0_0_10px_rgba(var(--primary-accent),0.3)]"
+                          />
+                       </div>
+                    </div>
+                  </div>
+                  <div className="p-4 rounded-xl bg-white/5 border border-white/10 flex flex-col gap-1">
+                    <span className="text-[7px] text-slate-500 font-bold uppercase tracking-widest">Strategic_Value</span>
+                    <span className="text-2xl font-mono font-bold text-secondary">{selectedHex.value}</span>
+                  </div>
+                </div>
+
+                <div className="relative group">
+                  <div className="absolute -inset-1 bg-gradient-to-r from-primary/20 via-secondary/20 to-primary/20 rounded-2xl blur opacity-20 group-hover:opacity-40 transition duration-1000 group-hover:duration-200 animate-tilt pointer-events-none" />
+                  <div className="relative p-6 rounded-2xl bg-slate-950 border border-primary/20 shadow-xl min-h-[200px]">
+                    <div className="flex items-center gap-2 mb-4 border-b border-primary/10 pb-2">
+                       <Cpu className="w-4 h-4 text-primary" />
+                       <span className="text-[9px] font-bold text-primary uppercase tracking-[0.3em]">Neural_Advisory_Output</span>
+                    </div>
+                    
+                    {isHexAnalyzing ? (
+                      <div className="flex flex-col items-center justify-center py-10 space-y-4">
+                        <div className="w-10 h-10 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
+                        <span className="text-[10px] font-mono text-primary animate-pulse tracking-widest">DECRYPTING_DISTRICT_PATTERNS...</span>
+                      </div>
+                    ) : (
+                      <div className="markdown-body text-[11px] text-slate-300 leading-relaxed font-sans">
+                        <Markdown>{hexAnalysis}</Markdown>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 p-3 bg-secondary/5 border border-secondary/20 rounded-xl">
+                    <Info className="w-3.5 h-3.5 text-secondary flex-shrink-0" />
+                    <p className="text-[9px] text-slate-400 font-medium italic">
+                       AEGIS Intelligence recommends targeting the specified tenant type to saturate underserviced demand nodes in this hex.
+                    </p>
+                </div>
+              </div>
+
+              <div className="p-4 bg-[#050505] border-t border-white/10 flex justify-end">
+                <button 
+                  onClick={() => setSelectedHex(null)}
+                  className="px-6 py-2 rounded-xl bg-primary text-slate-900 font-bold text-[10px] uppercase tracking-widest hover:bg-primary/90 transition-all shadow-[0_0_20px_rgba(var(--primary-accent),0.3)] active:scale-95"
+                >
+                  Confirm Strategic Analysis
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
 
       {/* Building Details Modal */}
       <AnimatePresence>
@@ -3729,33 +6476,60 @@ export default function App() {
                   )}
                   {/* AI Analysis Section */}
                   <div className="bg-primary/5 rounded-xl p-4 border border-primary/20 mb-4">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
                       <div className="flex items-center gap-2">
                         <Cpu className="w-4 h-4 text-primary" />
                         <h3 className="text-[9px] font-display font-bold text-primary uppercase tracking-[0.2em]">{t.aiAnalysis}</h3>
                       </div>
-                      <button
-                        onClick={() => handleAIAnalysis(selectedBuilding)}
-                        disabled={isAnalyzing}
-                        className={cn(
-                          "px-3 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all flex items-center gap-2",
-                          isAnalyzing 
-                            ? "bg-slate-800 text-slate-500 cursor-not-allowed" 
-                            : "bg-primary text-white hover:bg-primary/80 shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]"
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          onClick={() => handleAIAnalysis(selectedBuilding)}
+                          disabled={isAnalyzing}
+                          className={cn(
+                            "flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                            isAnalyzing 
+                              ? "bg-slate-800 text-slate-500 cursor-not-allowed" 
+                              : "bg-primary text-white hover:bg-primary/80 shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]"
+                          )}
+                        >
+                          {isAnalyzing ? (
+                            <>
+                              <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
+                              {t.analyzing}
+                            </>
+                          ) : (
+                            <>
+                              <Zap className="w-3 h-3" />
+                              {t.aiAnalysis}
+                            </>
+                          )}
+                        </button>
+                        
+                        {userRole === 'admin' && (
+                          <button
+                            onClick={() => handleGenerateReport(selectedBuilding)}
+                            disabled={isGeneratingReport}
+                            className={cn(
+                              "flex-1 sm:flex-none px-3 py-1.5 rounded-lg text-[9px] font-bold uppercase tracking-widest transition-all flex items-center justify-center gap-2",
+                              isGeneratingReport 
+                                ? "bg-slate-800 text-slate-500 cursor-not-allowed" 
+                                : "bg-secondary text-white hover:bg-secondary/80 shadow-[0_0_15px_rgba(var(--secondary-accent),0.3)]"
+                            )}
+                          >
+                            {isGeneratingReport ? (
+                              <>
+                                <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
+                                {t.generatingReport}
+                              </>
+                            ) : (
+                              <>
+                                <FileText className="w-3 h-3" />
+                                {t.generateReport}
+                              </>
+                            )}
+                          </button>
                         )}
-                      >
-                        {isAnalyzing ? (
-                          <>
-                            <div className="w-3 h-3 border-2 border-slate-500 border-t-transparent rounded-full animate-spin" />
-                            {t.analyzing}
-                          </>
-                        ) : (
-                          <>
-                            <Zap className="w-3 h-3" />
-                            {t.aiAnalysis}
-                          </>
-                        )}
-                      </button>
+                      </div>
                     </div>
 
                     {aiAnalysis ? (
@@ -3775,9 +6549,9 @@ export default function App() {
                   </div>
 
                   <div className="bg-base/40 rounded-xl p-4 border border-border/50">
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
                       <h3 className="text-[9px] font-display font-bold text-slate-400 uppercase tracking-[0.2em]">Strategic Documentation</h3>
-                      <div className="flex gap-2">
+                      <div className="flex flex-wrap gap-2">
                         <input 
                           type="file" 
                           ref={fileInputRef} 
@@ -3787,26 +6561,28 @@ export default function App() {
                         />
                         <button 
                           onClick={() => fileInputRef.current?.click()}
-                          className="flex items-center gap-2 px-3 py-1.5 bg-secondary/10 glass-hover text-secondary rounded-lg transition-colors border border-secondary/20"
+                          className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-2 bg-secondary/10 glass-hover text-secondary rounded-lg transition-colors border border-secondary/20"
                           title={t.uploadDocumentation}
                         >
                           <Upload className="w-3.5 h-3.5" />
                           <span className="text-[9px] font-bold uppercase tracking-widest">{t.uploadDocumentation}</span>
                         </button>
-                        <button 
-                          onClick={() => startCapture('photo')}
-                          className="p-1.5 bg-primary/10 glass-hover text-primary rounded-lg transition-colors"
-                          title="Capture Photo"
-                        >
-                          <Camera className="w-3.5 h-3.5" />
-                        </button>
-                        <button 
-                          onClick={() => startCapture('video')}
-                          className="p-1.5 bg-secondary/10 glass-hover text-secondary rounded-lg transition-colors"
-                          title="Record Video"
-                        >
-                          <Video className="w-3.5 h-3.5" />
-                        </button>
+                        <div className="flex gap-2">
+                          <button 
+                            onClick={() => startCapture('photo')}
+                            className="w-10 h-10 bg-primary/10 glass-hover text-primary rounded-lg transition-colors flex items-center justify-center"
+                            title="Capture Photo"
+                          >
+                            <Camera className="w-4 h-4" />
+                          </button>
+                          <button 
+                            onClick={() => startCapture('video')}
+                            className="w-10 h-10 bg-secondary/10 glass-hover text-secondary rounded-lg transition-colors flex items-center justify-center"
+                            title="Record Video"
+                          >
+                            <Video className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     </div>
 
@@ -4043,40 +6819,130 @@ export default function App() {
 
             <button 
               onClick={() => setInvestorCabinetOpen(true)}
-              className="w-full bg-primary hover:bg-primary/90 text-white font-display font-bold py-4 rounded-xl transition-all active:scale-95 flex items-center justify-center gap-3 uppercase tracking-[0.2em] text-[10px] shadow-[0_0_30px_rgba(var(--primary-accent),0.3)] mt-2 pointer-events-auto"
+              className="w-auto px-4 self-end bg-secondary/10 hover:bg-secondary/20 border border-secondary/30 text-secondary font-mono font-bold py-1.5 rounded-lg transition-all active:scale-95 flex items-center gap-2 uppercase tracking-widest text-[7px] shadow-lg mt-2 pointer-events-auto"
             >
-              <LayoutDashboard className="w-4 h-4" />
-              Open Investor Cabinet
+              <LayoutDashboard className="w-2.5 h-2.5" />
+              Strategic_Terminal
             </button>
           </div>
         </motion.div>
         )}
       </AnimatePresence>
 
+      <StrategicReportModal 
+        isOpen={reportModalOpen}
+        onClose={() => setReportModalOpen(false)}
+        data={reportData}
+        t={t}
+      />
+
       <InvestorCabinet 
         isOpen={investorCabinetOpen}
         onClose={() => setInvestorCabinetOpen(false)}
         balance={balance}
         portfolioValue={portfolioValue}
-        totalYield={totalYield}
-        portfolio={portfolio}
-        history={performanceHistory}
+        portfolio={portfolioDetailed}
+        performanceHistory={performanceHistory}
+        analyzedHexes={analyzedHexes}
+        marketOrders={marketOrders}
+        onListOnMarket={handleListOnMarket}
+        onBuyFromMarket={handleBuyFromMarket}
+        user={user}
         t={t}
+        onSelectAsset={(asset: any) => {
+          setViewState(prev => ({
+            ...prev,
+            latitude: asset.latitude,
+            longitude: asset.longitude,
+            zoom: 17,
+            pitch: 60,
+            bearing: 0,
+            transitionDuration: 1500
+          }));
+          setSelectedBuilding({ id: asset.id, properties: asset });
+          soundService.playSonar();
+        }}
       />
 
-      <div className="absolute left-4 bottom-24 z-50 pointer-events-auto flex flex-col gap-2">
+      <div className="absolute left-4 bottom-24 z-50 pointer-events-auto flex flex-col gap-1.5">
         {user && (
           <button 
             onClick={() => {
               setNewAsset(prev => ({ ...prev, latitude: viewState.latitude, longitude: viewState.longitude }));
               setCreateModalOpen(true);
             }}
-            className="w-10 h-10 bg-primary/20 hover:bg-primary/30 border border-primary/30 rounded-xl flex items-center justify-center text-primary transition-all shadow-xl"
+            className="w-8 h-8 bg-primary/20 hover:bg-primary/30 border border-primary/30 rounded-lg flex items-center justify-center text-primary transition-all shadow-xl"
             title={t.createAsset}
           >
-            <Plus className="w-5 h-5" />
+            <Plus className="w-4 h-4" />
           </button>
         )}
+      </div>
+
+      {/* Numerical Map Controls */}
+      <div className="absolute right-4 top-1/2 -translate-y-1/2 z-50 pointer-events-auto flex flex-col gap-1.5">
+        <div className="apple-glass-dark border border-white/10 rounded-xl p-1.5 flex flex-col gap-1.5 shadow-2xl">
+          <button 
+            onClick={() => {
+              setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 20), transitionDuration: 300 }));
+              soundService.playClick();
+            }}
+            className="w-8 h-8 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg flex items-center justify-center text-white transition-all"
+            title="Zoom In"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+          <button 
+            onClick={() => {
+              setViewState(prev => ({ ...prev, zoom: Math.max(prev.zoom - 1, 1), transitionDuration: 300 }));
+              soundService.playClick();
+            }}
+            className="w-8 h-8 bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg flex items-center justify-center text-white transition-all"
+            title="Zoom Out"
+          >
+            <Minus className="w-3.5 h-3.5" />
+          </button>
+          <div className="h-px bg-white/10 mx-2" />
+          <button 
+            onClick={() => {
+              setViewState(prev => ({ ...prev, pitch: Math.min(prev.pitch + 15, 85), transitionDuration: 300 }));
+              soundService.playClick();
+            }}
+            className="w-10 h-10 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl flex items-center justify-center text-white transition-all"
+            title="Tilt Up"
+          >
+            <ChevronUp className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={() => {
+              setViewState(prev => ({ ...prev, pitch: Math.max(prev.pitch - 15, 0), transitionDuration: 300 }));
+              soundService.playClick();
+            }}
+            className="w-10 h-10 bg-white/5 hover:bg-white/10 border border-white/10 rounded-xl flex items-center justify-center text-white transition-all"
+            title="Tilt Down"
+          >
+            <ChevronDown className="w-4 h-4" />
+          </button>
+          <div className="h-px bg-white/10 mx-2" />
+          <button 
+            onClick={() => {
+              setViewState(prev => ({ 
+                ...prev, 
+                pitch: 60, 
+                bearing: -20, 
+                zoom: 15.5,
+                latitude: 55.7558,
+                longitude: 37.6173,
+                transitionDuration: 1000 
+              }));
+              soundService.playSonar();
+            }}
+            className="w-10 h-10 bg-primary/10 hover:bg-primary/20 border border-primary/30 rounded-xl flex items-center justify-center text-primary transition-all"
+            title="Reset Navigation"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+        </div>
       </div>
 
       {/* Map Legend */}
@@ -4289,15 +7155,75 @@ export default function App() {
                     </div>
                   </div>
 
-                  <div className="space-y-2">
-                    <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.assetAddress}</label>
-                    <input 
-                      type="text"
-                      value={newAsset.address}
-                      onChange={(e) => setNewAsset(prev => ({ ...prev, address: e.target.value }))}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
-                    />
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between px-1">
+                      <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">{t.assetAddress}</label>
+                    </div>
+                    <div className="flex gap-2">
+                       <input 
+                         type="text"
+                         value={newAsset.address}
+                         onChange={(e) => setNewAsset(prev => ({ ...prev, address: e.target.value }))}
+                         className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                         placeholder="Enter location address..."
+                       />
+                       <button 
+                         onClick={handleSuggestAssetType}
+                         disabled={isSuggesting || !newAsset.address || newAsset.cost <= 0}
+                         className={cn(
+                           "px-4 bg-primary/10 hover:bg-primary/20 border border-primary/30 rounded-xl flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap",
+                           isSuggesting ? "text-primary animate-pulse" : "text-primary disabled:opacity-30 disabled:grayscale"
+                         )}
+                       >
+                         <Sparkles className="w-3.5 h-3.5" />
+                         Analyze
+                       </button>
+                    </div>
                   </div>
+
+                  {/* AI Suggestion Display */}
+                  <AnimatePresence>
+                    {suggestion && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="bg-primary/5 border border-primary/20 rounded-xl p-4 space-y-3">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Cpu className="w-3.5 h-3.5 text-primary" />
+                              <span className="text-[9px] font-bold text-primary uppercase tracking-widest">Strategic Recommendation</span>
+                            </div>
+            <button 
+              onClick={() => {
+                setNewAsset(prev => ({ ...prev, type: suggestion.type, model: suggestion.model }));
+                setSuggestion(null);
+              }}
+              className="text-[9px] font-bold text-base bg-primary px-2 py-1 rounded hover:bg-primary/80 transition-all uppercase tracking-widest"
+            >
+              Apply Logic
+            </button>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <p className="text-[7px] text-slate-500 uppercase font-bold tracking-widest">Recommended_Type</p>
+                                <p className="text-xs text-white font-mono uppercase">{suggestion.type}</p>
+                            </div>
+                            <div>
+                                <p className="text-[7px] text-slate-500 uppercase font-bold tracking-widest">Optimal_Model</p>
+                                <p className="text-xs text-white font-mono uppercase">{suggestion.model}</p>
+                            </div>
+                          </div>
+                          <div>
+                            <p className="text-[7px] text-slate-500 uppercase font-bold tracking-widest mb-1">Strategic_Justification</p>
+                            <p className="text-[10px] text-slate-400 italic leading-relaxed">"{suggestion.reason}"</p>
+                          </div>
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
 
                   <div className="grid grid-cols-3 gap-4">
                     <div className="space-y-2">
@@ -4389,7 +7315,7 @@ export default function App() {
                     "w-full font-bold py-4 rounded-2xl transition-all active:scale-95 text-sm uppercase tracking-[0.2em] flex items-center justify-center gap-3",
                     (isCreating || !newAsset.title.trim() || !newAsset.cost)
                       ? "bg-slate-800 text-slate-500 cursor-not-allowed border border-white/5"
-                      : "bg-primary hover:bg-primary/80 text-white shadow-[0_0_20px_rgba(var(--primary-accent),0.4)]"
+                      : "bg-primary hover:bg-primary/80 text-base shadow-[0_0_20px_rgba(var(--primary-accent),0.4)]"
                   )}
                 >
                   {isCreating ? (
@@ -4465,6 +7391,172 @@ export default function App() {
                 </div>
               </div>
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Syndicate Virtual Management Room */}
+      <AnimatePresence>
+        {syndicateRoomOpen && activeSyndicate && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[120] bg-black/80 backdrop-blur-2xl flex items-center justify-center p-4 sm:p-6"
+            onClick={() => setSyndicateRoomOpen(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              className="w-full max-w-4xl bg-slate-900 border border-white/10 rounded-[32px] shadow-2xl overflow-hidden flex flex-col md:flex-row max-h-[90vh]"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* Left Side: Summary & Progress */}
+              <div className="md:w-5/12 p-6 sm:p-8 bg-gradient-to-br from-white/5 to-transparent border-r border-white/5 flex flex-col">
+                <div className="flex items-center gap-3 mb-8">
+                  <div className="w-12 h-12 bg-secondary/20 rounded-2xl flex items-center justify-center border border-secondary/30 pulsate-glow overflow-hidden">
+                    <Handshake className="w-6 h-6 text-secondary" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-display font-bold text-white tracking-tight">Syndicated Deal</h2>
+                    <p className="text-[10px] text-slate-500 font-mono uppercase tracking-[0.2em]">{activeSyndicate.id}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-6 flex-1 overflow-y-auto pr-2 scrollbar-hide">
+                  <div>
+                    <p className="text-[10px] text-slate-400 uppercase font-bold tracking-[0.2em] mb-2">Subject Asset</p>
+                    <h3 className="text-xl font-bold text-white leading-tight mb-2 tracking-tight">{activeSyndicate.buildingName}</h3>
+                    <div className="flex items-center gap-2 mb-4">
+                      <div className="w-2 h-2 rounded-full bg-secondary animate-pulse" />
+                      <span className="text-[10px] font-mono text-secondary uppercase tracking-widest">Syndication_In_Progress</span>
+                    </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-end">
+                      <p className="text-[9px] text-slate-500 uppercase font-bold tracking-widest">Capital Accumulation</p>
+                      <p className="text-xs font-mono text-white">
+                        <span className="text-secondary font-bold">{((activeSyndicate.raisedAmount / activeSyndicate.targetAmount) * 100).toFixed(1)}%</span>
+                        <span className="text-slate-600 ml-1">Allocated</span>
+                      </p>
+                    </div>
+                    <div className="w-full h-2.5 bg-slate-800 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-secondary rounded-full shadow-[0_0_15px_rgba(var(--secondary-accent),0.5)] transition-all duration-1000 ease-out"
+                        style={{ width: `${(activeSyndicate.raisedAmount / activeSyndicate.targetAmount) * 100}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-[10px] font-mono">
+                      <span className="text-white">${activeSyndicate.raisedAmount.toLocaleString()}</span>
+                      <span className="text-slate-600">Of ${activeSyndicate.targetAmount.toLocaleString()}</span>
+                    </div>
+                  </div>
+
+                  <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-4">
+                     <div>
+                       <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest mb-2">Strategic Support Fees</p>
+                       <div className="space-y-2">
+                         <div className="flex justify-between text-[10px]">
+                           <span className="text-slate-400 font-medium">Administration Mgmt (2.0%)</span>
+                           <span className="text-white font-mono font-bold">${(activeSyndicate.targetAmount * activeSyndicate.adminFeeRate).toLocaleString()}</span>
+                         </div>
+                         <div className="flex justify-between text-[10px]">
+                           <span className="text-slate-400 font-medium">Legal & Compliance (1.5%)</span>
+                           <span className="text-white font-mono font-bold">${(activeSyndicate.targetAmount * activeSyndicate.legalFeeRate).toLocaleString()}</span>
+                         </div>
+                       </div>
+                     </div>
+                  </div>
+                  
+                  <div className="p-4 rounded-2xl bg-primary/5 border border-primary/10">
+                    <div className="flex items-start gap-3">
+                      <Shield className="w-4 h-4 text-primary mt-0.5" />
+                      <div className="space-y-1">
+                        <p className="text-[9px] text-primary uppercase font-bold tracking-widest">Legal Safeguard</p>
+                        <p className="text-[10px] text-slate-400 leading-relaxed italic">"Trust-less multi-party agreement executed via Yardsoft Escrow protocols."</p>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <button 
+                  onClick={() => setSyndicateRoomOpen(false)}
+                  className="mt-8 py-3 w-full bg-white/5 hover:bg-white/10 text-slate-400 text-[10px] font-bold uppercase tracking-[0.2em] rounded-xl border border-white/5 transition-all glass-hover"
+                >
+                  Minimize Management Suite
+                </button>
+              </div>
+
+              {/* Right Side: Execution & Participation */}
+              <div className="flex-1 p-6 sm:p-8 flex flex-col bg-slate-900 overflow-hidden">
+                 <div className="flex items-center justify-between mb-8">
+                   <h3 className="text-xs uppercase font-bold text-slate-500 tracking-[0.2em]">Syndicate Ledger</h3>
+                   <div className="flex items-center gap-2 px-3 py-1 bg-green-500/10 rounded-full border border-green-500/20">
+                     <div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
+                     <span className="text-[8px] font-mono text-green-500 uppercase tracking-widest font-bold">Secure Node Linked</span>
+                   </div>
+                 </div>
+
+                 <div className="flex-1 overflow-y-auto space-y-4 mb-8 pr-2 custom-scrollbar">
+                   <div className="space-y-3">
+                      <p className="text-[10px] text-slate-500 uppercase font-bold tracking-widest border-l-2 border-secondary pl-2 ml-1">Capital Contributors</p>
+                      {activeSyndicate.participants.map((p, idx) => (
+                        <div key={idx} className="flex items-center justify-between p-3 rounded-2xl bg-white/5 border border-white/5 group hover:border-secondary/30 transition-all shadow-sm">
+                          <div className="flex items-center gap-3">
+                            <div className="w-9 h-9 rounded-xl bg-slate-800 flex items-center justify-center text-xs font-bold text-slate-400 group-hover:bg-slate-700 transition-colors">
+                              {p.name.charAt(0)}
+                            </div>
+                            <div>
+                              <p className="text-sm font-bold text-white leading-none mb-1 tracking-tight">{p.name}</p>
+                              <p className="text-[8px] text-slate-500 uppercase font-mono tracking-widest">{p.role}</p>
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-sm font-mono font-bold text-white">${p.amount.toLocaleString()}</p>
+                            <p className="text-[8px] text-slate-600 uppercase font-mono tracking-tighter">{(p.amount / activeSyndicate.targetAmount * 100).toFixed(1)}% Share</p>
+                          </div>
+                        </div>
+                      ))}
+                      {activeSyndicate.participants.length === 0 && (
+                        <div className="py-12 flex flex-col items-center justify-center border-2 border-dashed border-white/5 rounded-3xl opacity-30 mt-4">
+                           <Users className="w-10 h-10 text-slate-600 mb-2" />
+                           <p className="text-[10px] text-slate-600 uppercase font-bold tracking-widest">Awaiting Institutional Entry</p>
+                        </div>
+                      )}
+                   </div>
+                 </div>
+
+                 {/* Interaction Area */}
+                 <div className="space-y-4 pt-6 border-t border-white/5">
+                    <div className="flex items-center justify-between mb-1">
+                       <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Execute Subscription</p>
+                       <p className="text-[10px] font-mono text-secondary uppercase font-bold tracking-widest bg-secondary/10 px-2 py-0.5 rounded">Avail: ${balance.toLocaleString()}</p>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                       {[1000000, 5000000, 10000000, 25000000].map(amt => (
+                         <button 
+                           key={amt}
+                           onClick={() => handleContributeToSyndicate(activeSyndicate.id, amt)}
+                           className={cn(
+                             "py-3.5 rounded-2xl text-[10px] font-display font-bold uppercase tracking-[0.2em] transition-all border shadow-lg",
+                             balance >= amt ? "bg-secondary/10 border-secondary/30 text-secondary hover:bg-secondary/20 hover:border-secondary/50 active:scale-95 shadow-secondary/5" : "bg-slate-800/50 border-white/5 text-slate-600 cursor-not-allowed shadow-none"
+                           )}
+                         >
+                           +${(amt / 1000000).toFixed(0)}M
+                         </button>
+                       ))}
+                    </div>
+                    <div className="flex items-center gap-2 p-3 bg-white/5 rounded-xl border border-white/5">
+                      <Info className="w-3.5 h-3.5 text-slate-500" />
+                      <p className="text-[8px] text-slate-500 leading-normal uppercase tracking-tight">
+                        Subscription binds participant to a 3.5% cumulative commission for system administration and legal clearing. Escrow managed via Sovereign protocols.
+                      </p>
+                    </div>
+                 </div>
+              </div>
+            </motion.div>
           </motion.div>
         )}
       </AnimatePresence>

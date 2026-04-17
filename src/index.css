@@ -100,6 +100,8 @@
   --border-color: rgba(0, 0, 0, 0.1);
   --text-main: #18181b;
   --text-muted: #71717a;
+  --primary-accent-rgb: 24, 24, 27; /* Darker primary for tactical in light mode */
+  --secondary-accent-rgb: 63, 63, 70;
 }
 
 @layer base {

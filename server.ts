@@ -87,7 +87,9 @@ async function startServer() {
       owner_id TEXT,
       cost REAL,
       yield REAL,
-      coordinates TEXT
+      coordinates TEXT,
+      encumbrances TEXT,
+      sanctions_resist TEXT
     );
 
     CREATE TABLE IF NOT EXISTS building_media (
@@ -124,16 +126,16 @@ async function startServer() {
   const buildingCount = await db.get("SELECT COUNT(*) as count FROM buildings");
   if (buildingCount.count === 0) {
     const seedData = [
-      { id: 101, height: 45, roi: 18, status: 1, owner_id: "user_1", cost: 1500000, yield: 25000, coords: [[37.6180, 55.7560], [37.6185, 55.7560], [37.6185, 55.7565], [37.6180, 55.7565], [37.6180, 55.7560]] },
-      { id: 102, height: 30, roi: 12, status: 1, owner_id: "user_2", cost: 800000, yield: 12000, coords: [[37.6160, 55.7550], [37.6165, 55.7550], [37.6165, 55.7555], [37.6160, 55.7555], [37.6160, 55.7550]] },
-      { id: 103, height: 60, roi: 5, status: 2, owner_id: "user_1", cost: 2200000, yield: 8000, coords: [[37.6190, 55.7540], [37.6195, 55.7540], [37.6195, 55.7545], [37.6190, 55.7545], [37.6190, 55.7540]] },
-      { id: 104, height: 85, roi: -12, status: 3, owner_id: "user_3", cost: 4500000, yield: -5000, coords: [[37.6210, 55.7570], [37.6215, 55.7570], [37.6215, 55.7575], [37.6210, 55.7575], [37.6210, 55.7570]] },
+      { id: 101, height: 45, roi: 18, status: 1, owner_id: "user_1", cost: 1500000, yield: 25000, coords: [[37.6180, 55.7560], [37.6185, 55.7560], [37.6185, 55.7565], [37.6180, 55.7565], [37.6180, 55.7560]], enc: 'None', sr: 'High' },
+      { id: 102, height: 30, roi: 12, status: 1, owner_id: "user_2", cost: 800000, yield: 12000, coords: [[37.6160, 55.7550], [37.6165, 55.7550], [37.6165, 55.7555], [37.6160, 55.7555], [37.6160, 55.7550]], enc: 'None', sr: 'Medium' },
+      { id: 103, height: 60, roi: 5, status: 2, owner_id: "user_1", cost: 2200000, yield: 8000, coords: [[37.6190, 55.7540], [37.6195, 55.7540], [37.6195, 55.7545], [37.6190, 55.7545], [37.6190, 55.7540]], enc: 'Lease_Hold_Expired', sr: 'Low' },
+      { id: 104, height: 85, roi: -12, status: 3, owner_id: "user_3", cost: 4500000, yield: -5000, coords: [[37.6210, 55.7570], [37.6215, 55.7570], [37.6215, 55.7575], [37.6210, 55.7575], [37.6210, 55.7570]], enc: 'Court_Order_Active', sr: 'None' },
     ];
 
     for (const b of seedData) {
       await db.run(
-        "INSERT INTO buildings (id, height, roi, status, owner_id, cost, yield, coordinates) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [b.id, b.height, b.roi, b.status, b.owner_id, b.cost, b.yield, JSON.stringify(b.coords)]
+        "INSERT INTO buildings (id, height, roi, status, owner_id, cost, yield, coordinates, encumbrances, sanctions_resist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [b.id, b.height, b.roi, b.status, b.owner_id, b.cost, b.yield, JSON.stringify(b.coords), b.enc, b.sr]
       );
     }
   }
@@ -324,10 +326,12 @@ async function startServer() {
           yield: b.yield
         };
         
-        // RLS Logic: Investor or Admin see ROI and Status
+        // RLS Logic: Investor or Admin see ROI, Status, and Strategic Data
         if (userRole === "investor" || userRole === "admin") {
           props.roi = b.roi;
           props.status = b.status;
+          props.encumbrances = b.encumbrances;
+          props.sanctions_resist = b.sanctions_resist;
         }
         
         // RLS Logic: Only Admin or Owner sees owner_id
