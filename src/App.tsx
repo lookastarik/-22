@@ -54,6 +54,8 @@ import {
   Play,
   Download,
   Filter,
+  ShieldCheck,
+  ShieldAlert,
   ChevronUp,
   Lock,
   Upload,
@@ -384,6 +386,10 @@ const translations = {
     reportCompetition: "Competitive Landscape",
     reportDate: "Protocol Date",
     reportExport: "Export Secured PDF",
+    buildingLevels: "Vertical Levels",
+    roofShape: "Roof Geometry",
+    assetHeight: "Absolute Height",
+    assetFootprint: "Strategic Footprint",
   },
   ru: {
     title: "YARDSOFT",
@@ -484,9 +490,13 @@ const translations = {
     reportTraffic: "Анализ Трафика",
     reportPopulation: "Население и Зона Охвата",
     reportMarket: "Аренда и Продажа",
-    reportCompetition: "Конкуренция",
+    reportCompetition: "Конкурентная Среда",
     reportDate: "Дата Протокола",
-    reportExport: "Экспорт в PDF",
+    reportExport: "Экспорт Защищенного PDF",
+    buildingLevels: "Этажность",
+    roofShape: "Форма Крыши",
+    assetHeight: "Абсолютная Высота",
+    assetFootprint: "Контур Застройки",
     gridBrightness: "Яркость Сетки",
     scanlineIntensity: "Сканирование Экрана",
     buildingScanlines: "Сканирование Зданий",
@@ -566,6 +576,121 @@ const strategicProjects: ProjectModel[] = [
     }
   }
 ];
+
+const DigitalMapHUD = ({ coords }: { coords: { lat: number, lon: number } }) => {
+  const [pulse, setPulse] = useState(0);
+  
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setPulse(p => (p + 1) % 100);
+    }, 50);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+      {/* Corner Brackets - Refined */}
+      <div className="map-hud-corner map-hud-corner-tl border-primary/60 w-16 h-16" />
+      <div className="map-hud-corner map-hud-corner-tr border-primary/60 w-16 h-16" />
+      <div className="map-hud-corner map-hud-corner-bl border-primary/60 w-16 h-16" />
+      <div className="map-hud-corner map-hud-corner-br border-primary/60 w-16 h-16" />
+
+      {/* Crosshair Center */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 flex flex-col items-center">
+        <div className="w-8 h-8 border border-primary/20 rounded-full flex items-center justify-center">
+          <div className="w-1 h-1 bg-primary/60 rounded-full shadow-[0_0_8px_rgba(var(--primary-accent-rgb),1)]" />
+        </div>
+        <div className="w-px h-8 bg-gradient-to-b from-primary/40 to-transparent mt-1" />
+      </div>
+
+      {/* Coordinate Display & System Status */}
+      <div className="absolute bottom-10 right-10 flex flex-col items-end gap-3 font-mono">
+        {/* System Logs Feed */}
+        <div className="flex flex-col items-end gap-1 opacity-60">
+           <span className="text-[6px] text-primary/50 uppercase font-bold tracking-[0.3em]">System_Feed_V2.1</span>
+           <div className="flex flex-col items-end">
+             <span className="text-[7px] text-white/40">SATELLITE_LINK: OPTIMAL</span>
+             <span className="text-[7px] text-white/40">HEURISTIC_BUFFER: 12%</span>
+             <span className="text-[7px] text-emerald-500/60 animate-pulse">ENCRYPTION: AES-4096_ACTIVE</span>
+           </div>
+        </div>
+
+        <div className="flex items-center gap-2 group">
+          <div className="flex flex-col items-end">
+             <span className="text-[8px] text-slate-500 uppercase tracking-widest font-bold">Vector_Node_Beta</span>
+             <span className="text-[6px] text-primary/40 leading-none">ID: 0xFD442A</span>
+          </div>
+          <div className="w-2 h-2 bg-primary rounded-full animate-ping opacity-40 shadow-[0_0_12px_rgba(var(--primary-accent-rgb),1)]" />
+        </div>
+
+        <div className="p-4 apple-glass-dark border border-white/5 rounded-2xl flex flex-col gap-2 shadow-2xl skew-x-[-12deg] relative group overflow-hidden">
+          <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-transparent pointer-events-none" />
+          
+          <div className="flex gap-6 unskew-x-[12deg] relative z-10">
+            <div className="flex flex-col">
+              <span className="text-[7px] text-slate-500 uppercase font-bold tracking-tighter mb-0.5">X_COORD</span>
+              <span className="text-sm text-white font-mono font-bold tabular-nums tracking-tighter">{coords.lat.toFixed(6)}°</span>
+            </div>
+            <div className="flex flex-col">
+              <span className="text-[7px] text-slate-500 uppercase font-bold tracking-tighter mb-0.5">Y_COORD</span>
+              <span className="text-sm text-white font-mono font-bold tabular-nums tracking-tighter">{coords.lon.toFixed(6)}°</span>
+            </div>
+          </div>
+
+          <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden unskew-x-[12deg] relative z-10">
+            <motion.div 
+              animate={{ width: ["0%", "100%"] }}
+              transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+              className="h-full bg-primary/40 shadow-[0_0_10px_rgba(var(--primary-accent-rgb),0.5)]"
+            />
+          </div>
+          
+          {/* Decorative Glitchy bits */}
+          <div className="absolute top-0 right-0 w-8 h-1 bg-primary/30" />
+          <div className="absolute bottom-0 left-0 w-1 h-8 bg-primary/30" />
+        </div>
+      </div>
+
+      {/* Compass & Mode Display */}
+      <div className="absolute top-10 left-10 flex flex-col gap-4">
+        <div className="relative group">
+          <div className="w-12 h-12 rounded-2xl border border-white/10 flex items-center justify-center relative overflow-hidden backdrop-blur-md shadow-2xl">
+             <div className="absolute inset-0 bg-gradient-to-br from-primary/10 to-transparent" />
+             <div className="scanline-anim opacity-20" />
+             <Activity className="w-5 h-5 text-primary animate-pulse" />
+          </div>
+          {/* Animated Orbit */}
+          <div 
+            className="absolute -inset-2 border border-primary/10 rounded-full" 
+            style={{ transform: `rotate(${pulse * 3.6}deg)` }}
+          >
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-1 h-1 bg-primary/40 rounded-full" />
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-0.5">
+           <div className="flex items-center gap-2">
+              <span className="text-[9px] text-primary font-bold uppercase tracking-[0.2em] font-display">Neural_Link</span>
+              <div className="flex gap-0.5">
+                {[1,2,3].map(i => (
+                  <div key={i} className={cn("w-1 h-1 rounded-full", i <= 2 ? "bg-primary" : "bg-primary/20", "animate-pulse")} />
+                ))}
+              </div>
+           </div>
+           <p className="text-[7px] text-slate-500 uppercase tracking-widest font-mono">Status: Nominal</p>
+        </div>
+      </div>
+
+      {/* Map Scanning Lines */}
+      <div className="map-scanline opacity-[0.15]" />
+      <div className="absolute left-0 top-0 bottom-0 w-[1px] bg-primary/10 shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.3)] animate-[map-scan-h_12s_linear_infinite]" />
+      
+      {/* Vignette & Noise */}
+      <div className="absolute inset-0 border-[60px] border-black/10 pointer-events-none opacity-40 shadow-[inset_0_0_150px_rgba(0,0,0,0.9)]" />
+      <div className="digital-map-overlay opacity-[0.03]" />
+    </div>
+  );
+};
 
 function DeckGLOverlay(props: MapboxOverlayProps) {
   const overlay = useControl<MapboxOverlay>(() => new MapboxOverlay(props));
@@ -4436,51 +4561,14 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Top Navigation */}
-      <div className="fixed top-4 right-4 sm:top-6 sm:right-6 md:top-8 md:right-8 z-50 flex items-center gap-2 pointer-events-auto">
-        <button 
-          onClick={() => {
-            const newMode = mode === 'dark' ? 'light' : 'dark';
-            setMode(newMode);
-            soundService.playClick();
-          }}
-          className="apple-glass w-9 h-9 sm:w-11 sm:h-11 rounded-xl flex items-center justify-center border border-white/10 text-slate-400 hover:text-primary transition-all shadow-lg"
-          title={`Switch to ${mode === 'dark' ? 'Light' : 'Dark'} Mode`}
-        >
-          {mode === 'dark' ? <Sun className="w-4.5 h-4.5 sm:w-5 sm:h-5" /> : <Moon className="w-4.5 h-4.5 sm:w-5 sm:h-5" />}
-        </button>
 
-        {!user ? (
-          <button 
-            onClick={handleLogin}
-            className="apple-glass h-9 sm:h-11 px-3 sm:px-5 rounded-xl flex items-center gap-2 border border-primary/30 text-primary hover:bg-primary/10 transition-all shadow-xl"
-          >
-            <Key className="w-4 h-4" />
-            <span className="text-[9px] sm:text-[10px] font-bold uppercase tracking-widest hidden xs:inline">{t.signIn}</span>
-          </button>
-        ) : (
-          <div className="relative">
-            <button 
-              onClick={() => setProfileOpen(!profileOpen)}
-              className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl overflow-hidden border-2 border-primary/50 shadow-xl hover:scale-105 transition-all active:scale-95"
-            >
-              <img 
-                src={user.photoURL || `https://picsum.photos/seed/${user.uid}/100/100`} 
-                alt="Profile" 
-                className="w-full h-full object-cover"
-                referrerPolicy="no-referrer"
-              />
-            </button>
-          </div>
-        )}
-      </div>
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute inset-0 bg-slate-950/20 backdrop-blur-[2px]" />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/40 via-transparent to-slate-950/20" />
       </div>
 
       {/* Search Bar */}
-      <div className="absolute top-4 left-4 sm:left-6 md:left-8 z-40 w-[calc(100%-8rem)] sm:w-auto sm:min-w-[320px] md:min-w-[400px] pointer-events-none">
+      <div className="absolute top-24 left-4 sm:left-6 md:left-8 z-40 w-[calc(100%-2rem)] sm:w-80 md:w-96 pointer-events-none">
         <div className="flex flex-col gap-2 pointer-events-auto">
           <div className="apple-glass rounded-xl flex items-center px-4 py-2.5 sm:py-3 group focus-within:ring-1 ring-primary/30 transition-all bg-slate-900/40 backdrop-blur-xl border border-white/5 shadow-2xl">
             <div className="relative flex items-center justify-center">
@@ -4668,21 +4756,6 @@ export default function App() {
                     </div>
                   </div>
                 )}
-
-                <div className="flex justify-end gap-3 pt-2">
-                  <button 
-                    onClick={() => setFilters({ statuses: ['stable', 'risk', 'anomalous'], minRoi: 0, owner: '' })}
-                    className="px-4 py-2 rounded-xl text-[10px] font-bold uppercase tracking-widest text-slate-500 hover:text-slate-300 transition-colors"
-                  >
-                    {t.reset}
-                  </button>
-                  <button 
-                    onClick={() => setFiltersOpen(false)}
-                    className="px-6 py-2 bg-primary/20 hover:bg-primary/30 border border-primary/30 rounded-xl text-[10px] font-bold uppercase tracking-widest text-primary transition-all"
-                  >
-                    {t.apply}
-                  </button>
-                </div>
               </motion.div>
             )}
           </AnimatePresence>
@@ -4690,7 +4763,16 @@ export default function App() {
       </div>
 
       {/* Rule 1: High Performance Map */}
-      <div className="relative w-full h-full z-0">
+      <div className="relative w-full h-full z-0 overflow-hidden">
+        {/* Digital Map Atmosphere */}
+        <div className="absolute inset-0 z-[5] pointer-events-none overflow-hidden">
+           <div className="digital-map-overlay opacity-30" />
+           <div className="map-scanline opacity-20" />
+        </div>
+        
+        {/* HUD Overlay */}
+        <DigitalMapHUD coords={mapCoords} />
+
         <Map
           ref={mapRef}
           {...viewState}
@@ -4830,12 +4912,14 @@ export default function App() {
                 'interpolate',
                 ['linear'],
                 ['get', 'render_height'],
-                0, mode === 'dark' ? '#0f172a' : '#cbd5e1',
-                100, mode === 'dark' ? '#1e293b' : '#94a3b8'
+                0, mode === 'dark' ? '#1e293b' : '#f1f5f9',
+                50, mode === 'dark' ? '#334155' : '#e2e8f0',
+                200, mode === 'dark' ? '#475569' : '#cbd5e1'
               ],
               'fill-extrusion-height': ['get', 'render_height'],
               'fill-extrusion-base': ['get', 'render_min_height'],
-              'fill-extrusion-opacity': 0.8
+              'fill-extrusion-opacity': mode === 'dark' ? 0.85 : 0.7,
+              'fill-extrusion-vertical-gradient': true
             }}
           />
           <DeckGLOverlay layers={layers} effects={[lightingEffect]} />
@@ -4858,8 +4942,8 @@ export default function App() {
       </div>
 
       {/* UI Overlay */}
-      <div className="absolute inset-0 pointer-events-none flex flex-col p-4 sm:p-6 z-20">
-
+      <div className="absolute inset-0 pointer-events-none z-[50]">
+        
         {/* Project Info Panel (Three.js Interaction) */}
         <AnimatePresence>
           {hoveredProject && (
@@ -4867,7 +4951,7 @@ export default function App() {
               initial={{ opacity: 0, x: 20, scale: 0.95 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, x: 20, scale: 0.95 }}
-              className="absolute top-24 right-6 w-80 apple-glass rounded-2xl border border-primary/40 shadow-2xl p-5 pointer-events-auto z-50 overflow-hidden"
+              className="absolute top-32 right-6 w-80 apple-glass rounded-2xl border border-primary/40 shadow-2xl p-5 pointer-events-auto z-50 overflow-hidden"
             >
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary/0 via-primary to-primary/0" />
               
@@ -4935,9 +5019,11 @@ export default function App() {
           
           <div className="scanline-anim" style={{ opacity: scanlineIntensity }} />
         </div>
+        
         {/* Header */}
-        <header className="flex items-center justify-between gap-4 pointer-events-auto mb-8 h-12 flex-shrink-0">
-          <div className="flex items-center gap-3 min-w-0">
+        <header className="absolute top-0 left-0 w-full flex justify-center pointer-events-none h-20 sm:h-24 pt-4 sm:pt-6 px-4 sm:px-6 z-[60]">
+          <div className="w-full max-w-screen-2xl flex items-center justify-between gap-4 pointer-events-none">
+            <div className="flex items-center gap-3 min-w-0 pointer-events-auto">
             <button 
               onClick={() => setDashboardOpen(!dashboardOpen)}
               className={cn(
@@ -4960,64 +5046,201 @@ export default function App() {
             </div>
           </div>
 
-          <div className="flex items-center gap-2 sm:gap-4 flex-shrink-0">
-            <button 
-              onClick={() => setInvestorCabinetOpen(true)}
-              className="flex sm:hidden apple-glass rounded-full p-2 items-center justify-center glass-hover transition-all bg-secondary/10 border border-secondary/20 shadow-lg"
-            >
-              <LayoutDashboard className="w-3.5 h-3.5 text-secondary" />
-            </button>
-
-            <button 
-              onClick={() => setInvestorCabinetOpen(true)}
-              className="hidden sm:flex apple-glass rounded-full px-4 py-2 items-center gap-3 glass-hover transition-all bg-secondary/10 border border-secondary/20 hover:bg-secondary/20 active:scale-95 shadow-[0_0_20px_rgba(var(--secondary-accent),0.1)]"
-            >
-              <LayoutDashboard className="w-4 h-4 text-secondary" />
-              <div className="flex flex-col items-start leading-none group">
-                <span className="text-[7px] text-slate-500 uppercase font-bold tracking-widest leading-none group-hover:text-secondary/60 transition-colors">Strategic</span>
-                <span className="text-[10px] font-mono font-bold text-secondary mt-0.5">Terminal</span>
-              </div>
-            </button>
-
-            <div className="hidden md:flex apple-glass rounded-full px-4 py-2 items-center gap-3 border border-white/5 shadow-inner">
-              <Wallet className="w-3.5 h-3.5 text-secondary" />
-              <div className="flex flex-col leading-none">
-                <span className="text-[8px] text-slate-500 uppercase font-bold tracking-widest leading-none">Treasury</span>
-                <span className="text-xs font-mono font-bold text-secondary mt-0.5">
-                  ${balance.toLocaleString()}
-                </span>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-1 apple-glass rounded-full border border-white/5 p-1">
+          <div className="flex items-center gap-2 flex-shrink-0 pointer-events-auto">
+            {/* Unified Tactical Control Bar */}
+            <div className="flex items-center apple-glass rounded-full border border-white/10 p-1 shadow-2xl transition-all duration-300">
+              {/* Cabinet Quick-Access */}
               <button 
-                onClick={handleExportCSV}
-                className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 transition-all"
-                title="Export Map Data (CSV)"
+                onClick={() => setInvestorCabinetOpen(true)}
+                className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 active:scale-95 transition-all group"
               >
-                <Download className="w-3.5 h-3.5" />
+                <LayoutDashboard className="w-3.5 h-3.5" />
+                <span className="hidden lg:inline text-[9px] font-mono font-bold uppercase tracking-widest">ST_Cabinet</span>
               </button>
-              
-              <button 
-                onClick={() => setSidebarOpen(!sidebarOpen)}
-                className={cn(
-                  "hidden lg:flex w-8 h-8 rounded-full items-center justify-center transition-all",
-                  sidebarOpen ? "text-primary bg-primary/10" : "text-slate-400 hover:text-white hover:bg-white/5"
-                )}
-                title="Toggle Strategic Filters"
-              >
-                <Filter className="w-3.5 h-3.5" />
-              </button>
+
+              {/* Financial Status (Treasury) */}
+              <div className="hidden md:flex items-center gap-3 px-4 py-1.5 border-l border-white/10 ml-1">
+                <Wallet className="w-3.5 h-3.5 text-secondary" />
+                <div className="flex flex-col leading-none">
+                  <span className="text-[7px] text-slate-500 uppercase font-bold tracking-[0.2em] leading-none mb-0.5">Treasury</span>
+                  <span className="text-xs font-mono font-bold text-secondary">
+                    ${balance.toLocaleString()}
+                  </span>
+                </div>
+              </div>
+
+              {/* System Actions Area */}
+              <div className="flex items-center gap-0.5 border-l border-white/10 ml-1 pl-1">
+                <button 
+                  onClick={handleExportCSV}
+                  className="w-8 h-8 rounded-full flex items-center justify-center text-slate-400 hover:text-white hover:bg-white/5 transition-all group"
+                  title="Export Data"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                </button>
+
+                <div className="w-px h-4 bg-white/10 mx-0.5" />
+
+                <button 
+                  onClick={() => setSettingsOpen(!settingsOpen)}
+                  className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center transition-all",
+                    settingsOpen ? "bg-primary/20 text-primary" : "text-slate-400 hover:text-white hover:bg-white/5"
+                  )}
+                  title="System Settings"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                </button>
+
+                <button 
+                  onClick={() => setProfileOpen(!profileOpen)}
+                  className={cn(
+                    "w-8 h-8 rounded-full flex items-center justify-center transition-all relative",
+                    profileOpen ? "bg-primary/20 text-primary" : "text-slate-400 hover:text-white hover:bg-white/5"
+                  )}
+                  title="User Profile"
+                >
+                  <User className="w-3.5 h-3.5" />
+                </button>
+                
+                <AnimatePresence>
+                  {profileOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 10, scale: 0.95 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: 10, scale: 0.95 }}
+                      className="absolute right-0 top-12 w-96 max-w-[calc(100vw-2rem)] bg-slate-900/98 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden z-50 flex flex-col cursor-default font-sans"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Header: Apple/Google Style */}
+                      <div className="p-6 bg-gradient-to-b from-white/5 to-transparent border-b border-white/5">
+                        <div className="flex items-center justify-between mb-6">
+                          <div className="flex items-center gap-4 text-left">
+                            <div className="relative">
+                              <div className="w-14 h-14 bg-gradient-to-br from-primary to-secondary rounded-2xl flex items-center justify-center shadow-lg">
+                                {user.photoURL ? (
+                                  <img src={user.photoURL} alt="" className="w-full h-full object-cover rounded-2xl" />
+                                ) : (
+                                  <User className="w-7 h-7 text-white" />
+                                ) }
+                              </div>
+                              <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
+                            </div>
+                            <div>
+                              <h3 className="text-base font-display font-bold text-white tracking-tight">{user.displayName || user.email?.split('@')[0]}</h3>
+                              <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">{user.email}</p>
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => setProfileOpen(false)}
+                            className="p-2 hover:bg-white/5 rounded-full transition-colors"
+                          >
+                            <X className="w-4 h-4 text-slate-500" />
+                          </button>
+                        </div>
+                        
+                        {/* Role Badge */}
+                        <div className="flex items-center gap-2 px-3 py-1.5 bg-white/5 rounded-full border border-white/5 w-fit">
+                          <Shield className={cn("w-3 h-3", userRole === 'admin' ? "text-primary" : "text-secondary")} />
+                          <span className="text-[9px] uppercase font-bold tracking-[0.2em] text-slate-300">
+                            {userRole === 'admin' ? 'System Administrator' : userRole === 'investor' ? 'Authorized Investor' : 'Public Access'}
+                          </span>
+                        </div>
+                      </div>
+                      
+                      <div className="flex-1 overflow-y-auto max-h-[60vh] scrollbar-hide text-left">
+                        {/* Financial Overview - Investor Focus */}
+                        <div className="p-6 space-y-6">
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
+                              <p className="text-[8px] uppercase font-bold text-slate-500 tracking-widest">Available Capital</p>
+                              <p className="text-lg font-display font-bold text-white">${balance.toLocaleString()}</p>
+                            </div>
+                            <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
+                              <p className="text-[8px] uppercase font-bold text-slate-500 tracking-widest">Portfolio Value</p>
+                              <p className="text-lg font-display font-bold text-secondary">${portfolioValue.toLocaleString()}</p>
+                            </div>
+                          </div>
+
+                          {/* Quick Stats */}
+                          <div className="space-y-3">
+                            <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Performance Metrics</h4>
+                            <div className="space-y-2">
+                              <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                                <div className="flex items-center gap-3">
+                                  <TrendingUp className="w-4 h-4 text-green-500" />
+                                  <span className="text-xs text-slate-300">Annual Yield</span>
+                                </div>
+                                <span className="text-xs font-mono font-bold text-green-500">+${totalYield.toLocaleString()}</span>
+                              </div>
+                              <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
+                                <div className="flex items-center gap-3">
+                                  <Building2 className="w-4 h-4 text-primary" />
+                                  <span className="text-xs text-slate-300">Assets Owned</span>
+                                </div>
+                                <span className="text-xs font-mono font-bold text-white">{portfolio.length} Units</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Admin Specific Controls */}
+                          {userRole === 'admin' && (
+                            <div className="space-y-3">
+                              <h4 className="text-[10px] uppercase font-bold text-primary/70 tracking-widest px-1">Admin Console</h4>
+                              <div className="grid grid-cols-2 gap-2">
+                                <button className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-primary/10 border border-primary/20 hover:bg-primary/20 transition-all group text-center w-full">
+                                  <Activity className="w-5 h-5 text-primary" />
+                                  <span className="text-[8px] font-bold uppercase tracking-widest">System_Logs</span>
+                                </button>
+                                <button className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-primary/10 border border-primary/20 hover:bg-primary/20 transition-all group text-center w-full">
+                                  <Database className="w-5 h-5 text-primary" />
+                                  <span className="text-[8px] font-bold uppercase tracking-widest">Data_Sync</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Quick Actions */}
+                          <div className="space-y-3">
+                            <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Quick Actions</h4>
+                            <div className="grid grid-cols-1 gap-1">
+                              <button className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition-colors text-xs text-slate-300 group">
+                                <div className="flex items-center gap-3">
+                                  <ShieldCheck className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" />
+                                  <span>Security Overview</span>
+                                </div>
+                                <ChevronDown className="w-3 h-3 -rotate-90 text-slate-600" />
+                              </button>
+                              <button className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition-colors text-xs text-slate-300 group">
+                                <div className="flex items-center gap-3">
+                                  <Key className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" />
+                                  <span>Access Credentials</span>
+                                </div>
+                                <ChevronDown className="w-3 h-3 -rotate-90 text-slate-600" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Footer */}
+                      <div className="p-4 bg-black/40 border-t border-white/5 mt-auto">
+                        <button 
+                          onClick={handleLogout}
+                          className="w-full flex items-center justify-center gap-3 py-3 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all text-xs font-bold text-red-400 uppercase tracking-widest"
+                        >
+                          <LogOut className="w-4 h-4" />
+                          Terminate Session
+                        </button>
+                      </div>
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             </div>
           </div>
-        </header>
-
-            <button 
-              onClick={() => setSettingsOpen(!settingsOpen)}
-              className="apple-glass rounded-full p-2 flex items-center justify-center glass-hover transition-all"
-            >
-              <Settings className="w-3.5 h-3.5 text-slate-400" />
-            </button>
+        </div>
+      </header>
 
             <AnimatePresence>
               {settingsOpen && (
@@ -5025,7 +5248,7 @@ export default function App() {
                   initial={{ opacity: 0, y: 10, scale: 0.95 }}
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                  className="absolute right-0 top-12 w-72 apple-glass rounded-xl shadow-2xl p-5 z-50 space-y-5"
+                  className="absolute right-0 top-16 sm:top-20 w-72 apple-glass rounded-xl shadow-2xl p-5 z-50 space-y-5"
                 >
                   <div className="flex items-center justify-between">
                     <h3 className="text-[10px] font-display font-bold text-white uppercase tracking-[0.2em]">{t.settings}</h3>
@@ -5241,688 +5464,267 @@ export default function App() {
               )}
             </AnimatePresence>
 
-            <div className="hidden sm:flex apple-glass rounded-full px-4 py-2 items-center gap-3">
-              <Wallet className="w-3.5 h-3.5 text-secondary" />
-              <div className="flex flex-col">
-                <span className="text-[8px] text-slate-500 uppercase font-bold leading-none tracking-widest">{t.treasury}</span>
-                <span className="text-xs font-mono font-bold text-secondary">
-                  ${balance.toLocaleString()}
-                </span>
-              </div>
-            </div>
-
-            <div className="relative pointer-events-auto hidden sm:block">
-              <button 
-                onClick={() => setRoleMenuOpen(!roleMenuOpen)}
-                className="apple-glass rounded-full px-4 py-2 flex items-center gap-3 glass-hover transition-all"
-              >
-                <Shield className={cn("w-3.5 h-3.5", userRole === 'admin' ? "text-white" : "text-primary")} />
-                <span className="text-[10px] font-display font-bold uppercase tracking-widest">
-                  {userRole === 'anonymous' ? t.public : userRole === 'investor' ? t.investor : t.admin}
-                </span>
-              </button>
-
-              <AnimatePresence>
-                {roleMenuOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute right-0 mt-2 w-64 max-w-[calc(100vw-2rem)] bg-slate-900/95 backdrop-blur-xl border border-slate-800 rounded-xl shadow-2xl p-1.5 z-50"
-                  >
-                    {[
-                      { 
-                        id: 'anonymous', 
-                        label: 'Public Access', 
-                        desc: 'Basic map data, building heights, and market values.',
-                        icon: Eye
-                      },
-                      { 
-                        id: 'investor', 
-                        label: 'Investor Mode', 
-                        desc: 'Full access to ROI metrics and yield analysis.',
-                        icon: TrendingUp
-                      },
-                      { 
-                        id: 'admin', 
-                        label: 'System Admin', 
-                        desc: 'Unrestricted access to all system data.',
-                        icon: Shield
-                      }
-                    ].map((role) => (
-                      <button
-                        key={role.id}
-                        onClick={() => {
-                          setUserRole(role.id as any);
-                          setRoleMenuOpen(false);
-                        }}
-                        className={cn(
-                          "group relative w-full flex flex-col gap-0.5 p-2.5 rounded-lg transition-all text-left",
-                          userRole === role.id ? "bg-white/20 border border-white/30" : "glass-hover border border-transparent"
-                        )}
-                      >
-                        <div className="flex items-center gap-2">
-                          <role.icon className={cn("w-3.5 h-3.5", userRole === role.id ? "text-white" : "text-slate-500")} />
-                          <span className={cn("text-xs font-bold", userRole === role.id ? "text-white" : "text-slate-300")}>
-                            {role.label}
-                          </span>
-                        </div>
-                        <p className="text-[9px] text-slate-500 leading-tight">
-                          {role.desc}
-                        </p>
-                      </button>
-                    ))}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-            <div className="relative pointer-events-auto">
-              <button 
-                onClick={() => setProfileOpen(!profileOpen)}
-                className="w-8 h-8 bg-slate-900/80 backdrop-blur-md border border-slate-800 rounded-full flex items-center justify-center glass-hover transition-colors"
-              >
-                <User className="w-4 h-4 text-slate-300" />
-              </button>
-
-              <AnimatePresence>
-                {profileOpen && (
-                  <motion.div
-                    initial={{ opacity: 0, y: 10, scale: 0.95 }}
-                    animate={{ opacity: 1, y: 0, scale: 1 }}
-                    exit={{ opacity: 0, y: 10, scale: 0.95 }}
-                    className="absolute right-0 mt-2 w-96 max-w-[calc(100vw-2rem)] bg-slate-900/98 backdrop-blur-2xl border border-white/10 rounded-3xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden z-50 flex flex-col"
-                  >
-                    {/* Header: Apple/Google Style */}
-                    <div className="p-6 bg-gradient-to-b from-white/5 to-transparent border-b border-white/5">
-                      <div className="flex items-center justify-between mb-6">
-                        <div className="flex items-center gap-4">
-                          <div className="relative">
-                            <div className="w-14 h-14 bg-gradient-to-br from-primary to-secondary rounded-2xl flex items-center justify-center shadow-lg">
-                              {user.photoURL ? (
-                                <img src={user.photoURL} alt="" className="w-full h-full object-cover rounded-2xl" />
-                              ) : (
-                                <User className="w-7 h-7 text-white" />
-                              )}
-                            </div>
-                            <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-green-500 border-2 border-slate-900 rounded-full" />
-                          </div>
-                          <div>
-                            <h3 className="text-base font-display font-bold text-white tracking-tight">{user.displayName || user.email?.split('@')[0]}</h3>
-                            <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">{user.email}</p>
-                          </div>
-                        </div>
-                        <button 
-                          onClick={() => setProfileOpen(false)}
-                          className="p-2 hover:bg-white/5 rounded-full transition-colors"
-                        >
-                          <X className="w-4 h-4 text-slate-500" />
-                        </button>
-                      </div>
-
-                      {/* Role Badge */}
-                      <div className="flex items-center gap-2 px-3 py-1.5 bg-white/5 rounded-full border border-white/5 w-fit">
-                        <Shield className={cn("w-3 h-3", userRole === 'admin' ? "text-primary" : "text-secondary")} />
-                        <span className="text-[9px] uppercase font-bold tracking-[0.2em] text-slate-300">
-                          {userRole === 'admin' ? 'System Administrator' : userRole === 'investor' ? 'Authorized Investor' : 'Public Access'}
-                        </span>
-                      </div>
-                    </div>
-
-                    <div className="flex-1 overflow-y-auto max-h-[60vh] scrollbar-hide">
-                      {/* Financial Overview - Investor Focus */}
-                      <div className="p-6 space-y-6">
-                        <div className="grid grid-cols-2 gap-4">
-                          <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
-                            <p className="text-[8px] uppercase font-bold text-slate-500 tracking-widest">Available Capital</p>
-                            <p className="text-lg font-display font-bold text-white">${balance.toLocaleString()}</p>
-                          </div>
-                          <div className="p-4 rounded-2xl bg-white/5 border border-white/5 space-y-1">
-                            <p className="text-[8px] uppercase font-bold text-slate-500 tracking-widest">Portfolio Value</p>
-                            <p className="text-lg font-display font-bold text-secondary">${portfolioValue.toLocaleString()}</p>
-                          </div>
-                        </div>
-
-                        {/* Quick Stats */}
-                        <div className="space-y-3">
-                          <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Performance Metrics</h4>
-                          <div className="space-y-2">
-                            <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
-                              <div className="flex items-center gap-3">
-                                <TrendingUp className="w-4 h-4 text-green-500" />
-                                <span className="text-xs text-slate-300">Annual Yield</span>
-                              </div>
-                              <span className="text-xs font-mono font-bold text-green-500">+${totalYield.toLocaleString()}</span>
-                            </div>
-                            <div className="flex items-center justify-between p-3 rounded-xl bg-white/5 border border-white/5">
-                              <div className="flex items-center gap-3">
-                                <Building2 className="w-4 h-4 text-primary" />
-                                <span className="text-xs text-slate-300">Assets Owned</span>
-                              </div>
-                              <span className="text-xs font-mono font-bold text-white">{portfolio.length} Units</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Admin Specific Controls */}
-                        {userRole === 'admin' && (
-                          <div className="space-y-3">
-                            <h4 className="text-[10px] uppercase font-bold text-primary/70 tracking-widest px-1">Admin Console</h4>
-                            <div className="grid grid-cols-2 gap-2">
-                              <button className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-primary/10 border border-primary/20 hover:bg-primary/20 transition-all group">
-                                <LayoutDashboard className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
-                                <span className="text-[9px] uppercase font-bold text-primary tracking-widest">System Logs</span>
-                              </button>
-                              <button className="flex flex-col items-center gap-2 p-4 rounded-2xl bg-primary/10 border border-primary/20 hover:bg-primary/20 transition-all group">
-                                <Terminal className="w-5 h-5 text-primary group-hover:scale-110 transition-transform" />
-                                <span className="text-[9px] uppercase font-bold text-primary tracking-widest">API Debug</span>
-                              </button>
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Syndicated Transactions */}
-                        <div className="space-y-3 pt-2">
-                           <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">Syndicated Transactions</h4>
-                           <div className="space-y-2">
-                             {syndicates.length > 0 ? syndicates.map(s => (
-                               <button 
-                                 key={s.id}
-                                 onClick={() => {
-                                   setActiveSyndicateId(s.id);
-                                   setSyndicateRoomOpen(true);
-                                   setProfileOpen(false);
-                                   soundService.playClick();
-                                 }}
-                                 className="w-full flex items-center justify-between p-3 rounded-2xl bg-white/5 border border-white/5 hover:bg-white/10 hover:border-secondary/30 transition-all text-left"
-                               >
-                                 <div className="flex items-center gap-3">
-                                   <div className="w-8 h-8 rounded-lg bg-secondary/10 flex items-center justify-center">
-                                     <Handshake className="w-4 h-4 text-secondary" />
-                                   </div>
-                                   <div>
-                                     <p className="text-xs font-bold text-white tracking-tight leading-none mb-1">{s.buildingName}</p>
-                                     <p className="text-[8px] text-slate-500 uppercase font-mono tracking-widest">{s.id}</p>
-                                   </div>
-                                 </div>
-                                 <div className="text-right">
-                                   <p className="text-[10px] font-mono font-bold text-secondary">
-                                     {((s.raisedAmount / s.targetAmount) * 100).toFixed(0)}%
-                                   </p>
-                                   <p className="text-[7px] text-slate-600 uppercase font-bold tracking-tighter">Funded</p>
-                                 </div>
-                               </button>
-                             )) : (
-                               <div className="p-8 rounded-2xl bg-white/5 border border-white/5 border-dashed flex flex-col items-center justify-center opacity-40">
-                                 <Users className="w-6 h-6 text-slate-600 mb-2" />
-                                 <p className="text-[9px] text-slate-600 uppercase font-bold tracking-widest">No Active Syndicates</p>
-                               </div>
-                             )}
-                           </div>
-                        </div>
-
-                        {/* General Settings */}
-                        <div className="space-y-2">
-                          <h4 className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">System Settings</h4>
-                          <div className="space-y-1">
-                            <button className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition-colors text-xs text-slate-300 group">
-                              <div className="flex items-center gap-3">
-                                <Settings className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" />
-                                <span>Security Preferences</span>
-                              </div>
-                              <ChevronDown className="w-3 h-3 -rotate-90 text-slate-600" />
-                            </button>
-                            <button className="w-full flex items-center justify-between p-3 rounded-xl hover:bg-white/5 transition-colors text-xs text-slate-300 group">
-                              <div className="flex items-center gap-3">
-                                <Key className="w-4 h-4 text-slate-500 group-hover:text-white transition-colors" />
-                                <span>Access Credentials</span>
-                              </div>
-                              <ChevronDown className="w-3 h-3 -rotate-90 text-slate-600" />
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Footer */}
-                        <div className="p-4 bg-black/40 border-t border-white/5 mt-auto">
-                          <button 
-                            onClick={handleLogout}
-                            className="w-full flex items-center justify-center gap-3 py-3 rounded-2xl bg-red-500/10 hover:bg-red-500/20 border border-red-500/20 transition-all text-xs font-bold text-red-400 uppercase tracking-widest"
-                          >
-                            <LogOut className="w-4 h-4" />
-                            Terminate Session
-                          </button>
-                        </div>
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </div>
-
-
-      {/* Tactical & Strategic Command Sidebars */}
-      <div className="absolute left-4 sm:left-6 top-20 sm:top-24 flex flex-col gap-2 pointer-events-auto z-[40]">
+      {/* Operations Command Hub (Consolidated) */}
+      <div className="absolute left-4 sm:left-6 top-[30%] translate-y-0 flex flex-col gap-3 pointer-events-auto z-[70]">
         
-        {/* Strategic Filters Sidebar */}
+        {/* Hub Control Toggle */}
         <div className="relative group">
           <button 
             onClick={() => {
               setSidebarOpen(!sidebarOpen);
-              setTacticalMenuOpen(false);
+              if (!sidebarOpen) setTacticalMenuOpen(false);
             }}
             className={cn(
-              "apple-glass rounded-xl p-2.5 flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
-              sidebarOpen ? "bg-primary/20 border-primary/40 text-primary shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]" : "border-white/5 text-slate-400 glass-hover"
+              "apple-glass rounded-lg w-[30px] h-[30px] flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
+              sidebarOpen ? "bg-primary/20 border-primary/40 text-primary" : "border-white/5 text-slate-500 glass-hover"
             )}
-            title="Strategic Data Filters"
+            title="Sovereign Analytical Core"
           >
-            <Filter className={cn("w-4 h-4", sidebarOpen && "animate-pulse")} />
+            <ShieldAlert className={cn("w-3.5 h-3.5", sidebarOpen && "animate-pulse")} />
           </button>
-
-          <AnimatePresence>
-            {sidebarOpen && (
-              <motion.div
-                initial={{ opacity: 0, x: -20, scale: 0.95 }}
-                animate={{ opacity: 1, x: 0, scale: 1 }}
-                exit={{ opacity: 0, x: -20, scale: 0.95 }}
-                className="absolute left-full ml-3 top-0 pointer-events-auto origin-left"
-              >
-                <div className="apple-glass rounded-xl p-4 border border-white/10 shadow-2xl flex flex-col gap-4 w-52 overflow-hidden">
-                  <div className="flex items-center justify-between border-b border-white/5 pb-2">
-                    <div className="flex items-center gap-2">
-                      <Filter className="w-3.5 h-3.5 text-primary" />
-                      <span className="text-[10px] font-bold text-white uppercase tracking-widest">Strategy_Gate</span>
-                    </div>
-                    <button onClick={() => setSidebarOpen(false)} className="p-1 hover:bg-white/5 rounded text-slate-500 hover:text-white transition-colors">
-                      <X className="w-3 h-3" />
-                    </button>
-                  </div>
-
-                  <div className="space-y-3">
-                    <label className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Tactical_States</label>
-                    <div className="space-y-1">
-                      {[
-                        { id: 'stable', label: 'Stable', color: 'bg-emerald-500', glow: 'shadow-[0_0_10px_rgba(16,185,129,0.2)]' },
-                        { id: 'risk', label: 'Risk', color: 'bg-red-500', glow: 'shadow-[0_0_10px_rgba(239,68,68,0.2)]' },
-                        { id: 'anomalous', label: 'Anomalous', color: 'bg-slate-500', glow: 'shadow-[0_0_10px_rgba(107,114,128,0.2)]' }
-                      ].map(st => (
-                        <button
-                          key={st.id}
-                          onClick={() => toggleStatusFilter(st.id)}
-                          className={cn(
-                            "w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg border transition-all text-[9px] font-bold uppercase tracking-wider",
-                            filters.statuses.includes(st.id) ? "bg-white/5 border-white/20 text-white" : "border-transparent text-slate-600 hover:bg-white/5"
-                          )}
-                        >
-                          <div className="flex items-center gap-2">
-                            <div className={cn("w-1.5 h-1.5 rounded-full", filters.statuses.includes(st.id) ? st.color : "bg-slate-800")} />
-                            {st.label}
-                          </div>
-                          {filters.statuses.includes(st.id) && <div className="w-1.5 h-1.5 bg-primary rounded-sm" />}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  
-                  <div className="space-y-2.5 pt-3 border-t border-white/5">
-                    <div className="flex justify-between items-center px-1">
-                      <label className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">ROI_Threshold</label>
-                      <span className="text-[9px] font-mono text-primary font-bold">{filters.minRoi}%</span>
-                    </div>
-                    <input 
-                      type="range"
-                      min="0"
-                      max="30"
-                      value={filters.minRoi}
-                      onChange={(e) => setFilters(prev => ({ ...prev, minRoi: parseInt(e.target.value) }))}
-                      className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary"
-                    />
-                  </div>
-
-                  <button 
-                    onClick={() => setFilters({ statuses: ['stable', 'risk', 'anomalous'], minRoi: 0, owner: '' })}
-                    className="w-full py-1.5 mt-2 text-[8px] text-slate-500 hover:text-primary uppercase font-bold tracking-widest border border-white/5 rounded-lg transition-all"
-                  >
-                    Reset Intel
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
         </div>
 
-        {/* Tactical Overlays Sidebar */}
-        <div className="relative group">
-          <button 
-            onClick={() => {
-              setTacticalMenuOpen(!tacticalMenuOpen);
-              setSidebarOpen(false);
-            }}
-            className={cn(
-              "apple-glass rounded-xl p-2.5 flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
-              tacticalMenuOpen ? "bg-secondary/20 border-secondary/40 text-secondary shadow-[0_0_15px_rgba(var(--secondary-accent),0.3)]" : "border-white/5 text-slate-400 glass-hover"
-            )}
-            title="Tactical Visualization"
-          >
-            <Eye className={cn("w-4 h-4", tacticalMenuOpen && "animate-pulse")} />
-          </button>
-
-          <AnimatePresence>
-            {tacticalMenuOpen && (
-              <motion.div
-                initial={{ opacity: 0, x: -20, scale: 0.95 }}
-                animate={{ opacity: 1, x: 0, scale: 1 }}
-                exit={{ opacity: 0, x: -20, scale: 0.95 }}
-                className="absolute left-full ml-3 top-0 pointer-events-auto origin-left"
-              >
-                <div className="apple-glass rounded-xl p-3 border border-white/10 shadow-2xl flex flex-col gap-2 w-44">
-                  <div className="flex items-center gap-2 border-b border-white/5 pb-2 mb-1 px-1">
-                    <Cpu className="w-3 h-3 text-secondary" />
-                    <span className="text-[9px] font-bold text-white uppercase tracking-widest">Tactical_Link</span>
-                  </div>
-                  
-                  {[
-                    { id: 'grid', icon: Grid, active: showGrid, toggle: () => setShowGrid(!showGrid), label: t.tacticalGrid, color: 'primary' },
-                    { id: 'hex', icon: Hexagon, active: showHexGrid, toggle: () => {
-                        const newState = !showHexGrid;
-                        setShowHexGrid(newState);
-                        if (newState) soundService.playSonar();
-                        else soundService.playClick();
-                      }, label: t.tacticalCells, color: 'secondary' },
-                    { id: 'traffic', icon: Activity, active: showTraffic, toggle: () => setShowTraffic(!showTraffic), label: 'Live Traffic', color: 'emerald' },
-                    { id: 'buildings', icon: Building2, active: showBuildings, toggle: () => setShowBuildings(!showBuildings), label: '3D Extrusions', color: 'blue' }
-                  ].map(ctrl => (
-                    <button 
-                      key={ctrl.id}
-                      onClick={ctrl.toggle}
-                      className={cn(
-                        "w-full flex items-center justify-between p-2 rounded-lg border transition-all text-[9px] font-bold uppercase tracking-wider group",
-                        ctrl.active 
-                          ? `bg-${ctrl.color}-500/10 border-${ctrl.color}-500/30 text-${ctrl.color}-400` 
-                          : "border-transparent text-slate-500 hover:bg-white/5 hover:text-slate-300"
-                      )}
-                    >
-                      <div className="flex items-center gap-2">
-                        <ctrl.icon className="w-3.5 h-3.5" />
-                        {ctrl.label}
-                      </div>
-                      <div className={cn(
-                        "w-1.5 h-1.5 rounded-full transition-all",
-                        ctrl.active ? `bg-${ctrl.color}-500 shadow-[0_0_8px_rgba(var(--${ctrl.color}-accent),0.6)]` : "bg-slate-800"
-                      )} />
-                    </button>
-                  ))}
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
-      </div>
-
-      {/* Map Controls */}
-      <div className="absolute right-4 sm:right-6 top-20 sm:top-24 flex flex-col gap-3 pointer-events-auto z-[40]">
-          {/* Layers Control */}
-          <div className="relative">
-            <button 
-              onClick={() => setLayersMenuOpen(!layersMenuOpen)}
-              className={cn(
-                "apple-glass rounded-lg p-2 flex items-center justify-center transition-all border shadow-lg",
-                layersMenuOpen ? "bg-primary/20 border-primary/40 text-primary" : "border-white/5 text-slate-400 glass-hover"
-              )}
-              title={t.layers}
+        {/* Global Strategy Menu (Left) */}
+        <AnimatePresence>
+          {sidebarOpen && (
+            <motion.div
+              initial={{ opacity: 0, x: -20, scale: 0.95 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: -20, scale: 0.95 }}
+              className="absolute left-full ml-3 top-0 pointer-events-auto origin-left w-64 apple-glass rounded-2xl border border-white/10 shadow-2xl p-4 overflow-hidden"
             >
-              <Layers className="w-4 h-4" />
-            </button>
+              <div className="flex items-center justify-between border-b border-white/5 pb-3 mb-4">
+                <div className="flex items-center gap-2">
+                  <Activity className="w-3.5 h-3.5 text-primary" />
+                  <span className="text-[10px] font-bold text-white uppercase tracking-widest italic font-mono">Operations_Hub</span>
+                </div>
+                <button onClick={() => setSidebarOpen(false)} className="p-1 hover:bg-white/5 rounded text-slate-500 hover:text-white transition-colors">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
 
-            <AnimatePresence>
-              {layersMenuOpen && (
-                <motion.div
-                  initial={{ opacity: 0, x: 20, scale: 0.95 }}
-                  animate={{ opacity: 1, x: 0, scale: 1 }}
-                  exit={{ opacity: 0, x: 20, scale: 0.95 }}
-                  className="absolute right-full mr-3 top-0 w-56 apple-glass rounded-xl shadow-2xl border border-white/10 p-4 z-50 space-y-4"
-                >
-                  <div className="space-y-3">
-                    <h4 className="text-[9px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.theme}</h4>
-                    <div className="grid grid-cols-1 gap-1.5">
-                      {basemaps.map(m => (
-                        <button
-                          key={m.id}
-                          onClick={() => {
-                            setBasemap(m.url);
-                            soundService.playClick();
-                            if (m.id === 'satellite' || m.id === 'aerial') {
-                              setViewState(prev => ({
-                                ...prev,
-                                pitch: 60,
-                                bearing: -20,
-                                transitionDuration: 1000
-                              }));
-                            }
-                          }}
-                          className={cn(
-                            "flex items-center gap-3 p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
-                            JSON.stringify(basemap) === JSON.stringify(m.url) ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
-                          )}
-                        >
-                          {m.icon}
-                          {m.name}
-                        </button>
-                      ))}
-                    </div>
+              {/* Multi-Section Management */}
+              <div className="space-y-6">
+                {/* 1. Tactical Visualization */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 px-1 mb-2">
+                    <div className="w-1 h-3 bg-secondary rounded-full" />
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{t.layers}</span>
                   </div>
-
-                  <div className="pt-4 border-t border-white/5 space-y-3">
-                    <h4 className="text-[9px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.layers}</h4>
-                    <div className="space-y-1.5">
-                      <button
-                        onClick={() => setShowBuildings(!showBuildings)}
-                        className={cn(
-                          "flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
-                          showBuildings ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
-                        )}
-                      >
-                        <div className="flex items-center gap-3">
-                          <Building2 className="w-3.5 h-3.5" />
-                          {t.buildings}
-                        </div>
-                        {showBuildings ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                      </button>
-
-                      <button
-                        onClick={() => setShowTraffic(!showTraffic)}
-                        className={cn(
-                          "flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
-                          showTraffic ? "bg-secondary/20 text-secondary border border-secondary/30" : "text-slate-400 hover:bg-white/5"
-                        )}
-                      >
-                        <div className="flex items-center gap-3">
-                          <Activity className="w-3.5 h-3.5" />
-                          {language === 'en' ? 'Live Traffic' : 'Трафик'}
-                        </div>
-                        {showTraffic ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                      </button>
-
-                      <button
-                        onClick={() => setShowGrid(!showGrid)}
-                        className={cn(
-                          "flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
-                          showGrid ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
-                        )}
-                      >
-                        <div className="flex items-center gap-3">
-                          <Grid className="w-3.5 h-3.5" />
-                          {t.tacticalGrid}
-                        </div>
-                        {showGrid ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
-                      </button>
-
-                      <button
-                        onClick={() => {
+                  <div className="grid grid-cols-1 gap-1">
+                    {[
+                      { id: 'buildings', icon: Building2, active: showBuildings, toggle: () => setShowBuildings(!showBuildings), label: t.buildings },
+                      { id: 'grid', icon: Grid, active: showGrid, toggle: () => setShowGrid(!showGrid), label: t.tacticalGrid },
+                      { id: 'hex', icon: Hexagon, active: showHexGrid, toggle: () => {
                           const newState = !showHexGrid;
                           setShowHexGrid(newState);
                           if (newState) soundService.playSonar();
-                          else soundService.playClick();
-                        }}
+                        }, label: t.tacticalCells },
+                      { id: 'traffic', icon: Activity, active: showTraffic, toggle: () => setShowTraffic(!showTraffic), label: 'Live Traffic' }
+                    ].map(layer => (
+                      <button
+                        key={layer.id}
+                        onClick={layer.toggle}
                         className={cn(
-                          "flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
-                          showHexGrid ? "bg-secondary/20 text-secondary border border-secondary/30" : "text-slate-400 hover:bg-white/5"
+                          "flex items-center justify-between w-full px-3 py-2 rounded-lg text-[9px] font-display uppercase tracking-wider transition-all",
+                          layer.active ? "bg-white/5 text-white border border-white/10" : "text-slate-500 hover:bg-white/5"
                         )}
                       >
-                        <div className="flex items-center gap-3">
-                          <Hexagon className="w-3.5 h-3.5" />
-                          {t.tacticalCells}
+                        <div className="flex items-center gap-2.5">
+                          <layer.icon className="w-3.5 h-3.5" />
+                          {layer.label}
                         </div>
-                        {showHexGrid ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                        <div className={cn("w-1.5 h-1.5 rounded-full", layer.active ? "bg-primary pulsate-glow" : "bg-slate-800")} />
                       </button>
-
-                      <button
-                        disabled
-                        className="flex items-center justify-between w-full p-2 rounded-lg text-[10px] font-display uppercase tracking-wider text-slate-600 cursor-not-allowed"
-                      >
-                        <div className="flex items-center gap-3">
-                          <Shield className="w-3.5 h-3.5" />
-                          Future Layer
-                        </div>
-                        <Lock className="w-3 h-3" />
-                      </button>
-                    </div>
+                    ))}
                   </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+                </div>
 
-          {/* Tactical Quick Toggles */}
-          <div className="flex flex-col gap-1.5">
-            <button 
-              onClick={() => setShowGrid(!showGrid)}
-              className={cn(
-                "apple-glass rounded-lg p-1.5 flex items-center justify-center transition-all border shadow-lg group relative",
-                showGrid ? "bg-primary/20 border-primary/40 text-primary shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]" : "border-white/5 text-slate-400 glass-hover"
-              )}
-              title={`${showGrid ? 'Hide' : 'Show'} ${t.tacticalGrid}`}
-            >
-              <Grid className="w-3.5 h-3.5" />
-              {showGrid && (
-                <motion.div 
-                  layoutId="active-indicator-grid"
-                  className="absolute -right-1 -top-1 w-1.5 h-1.5 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary-accent),0.8)]"
-                />
-              )}
-            </button>
-            <button 
-              onClick={() => {
-                const newState = !showHexGrid;
-                setShowHexGrid(newState);
-                if (newState) soundService.playSonar();
-                else soundService.playClick();
-              }}
-              className={cn(
-                "apple-glass rounded-lg p-1.5 flex items-center justify-center transition-all border shadow-lg group relative",
-                showHexGrid ? "bg-secondary/20 border-secondary/40 text-secondary shadow-[0_0_15px_rgba(var(--secondary-accent),0.3)]" : "border-white/5 text-slate-400 glass-hover"
-              )}
-              title={`${showHexGrid ? 'Hide' : 'Show'} ${t.tacticalCells}`}
-            >
-              <Hexagon className="w-3.5 h-3.5" />
-              {showHexGrid && (
-                <motion.div 
-                  layoutId="active-indicator-hex"
-                  className="absolute -right-1 -top-1 w-1.5 h-1.5 bg-secondary rounded-full shadow-[0_0_10px_rgba(var(--secondary-accent),0.8)]"
-                />
-              )}
-            </button>
-            <button 
-              onClick={() => {
-                 setInvestorCabinetOpen(true);
-                 soundService.playSonar();
-              }}
-              className="apple-glass rounded-lg p-1.5 flex items-center justify-center transition-all border shadow-lg group relative border-white/5 text-slate-400 glass-hover"
-              title="Secondary Asset Exchange"
-            >
-              <ShoppingCart className="w-3.5 h-3.5 hover:text-secondary transition-colors" />
-            </button>
-          </div>
+                {/* 2. Orbital Twin Suite */}
+                <div className="space-y-2 pt-4 border-t border-white/5">
+                  <div className="flex items-center gap-2 px-1 mb-2">
+                    <div className="w-1 h-3 bg-primary rounded-full" />
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest italic animate-pulse">Orbital_Twin_Suite</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1">
+                    {[
+                      { id: 'infra-power', icon: Zap, active: showInfraPower, toggle: () => setShowInfraPower(!showInfraPower), label: 'Twin // Power Grid' },
+                      { id: 'infra-comm', icon: Radio, active: showInfraComm, toggle: () => setShowInfraComm(!showInfraComm), label: 'Twin // Comm Uplinks' },
+                      { id: 'risk-radar', icon: Shield, active: showRiskRadar, toggle: () => setShowRiskRadar(!showRiskRadar), label: 'Sovereign Risk Radar' },
+                      { id: 'projects', icon: Hammer, active: showFutureProjects, toggle: () => setShowFutureProjects(!showFutureProjects), label: 'Development SIM' }
+                    ].map(layer => (
+                      <button
+                        key={layer.id}
+                        onClick={() => {
+                          layer.toggle();
+                          soundService.playClick();
+                        }}
+                        className={cn(
+                          "flex items-center justify-between w-full px-3 py-2 rounded-lg text-[9px] font-display uppercase tracking-wider transition-all",
+                          layer.active ? "bg-primary/10 text-primary border border-primary/20" : "text-slate-500 hover:bg-white/5"
+                        )}
+                      >
+                        <div className="flex items-center gap-2.5">
+                          <layer.icon className="w-3.5 h-3.5" />
+                          {layer.label}
+                        </div>
+                        <div className={cn("w-1.5 h-1.5 rounded-full", layer.active ? "bg-primary pulsate-glow" : "bg-slate-800")} />
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
-          {/* Legend Toggle */}
+                {/* 3. Strategic Filtering */}
+                <div className="space-y-3 pt-4 border-t border-white/5">
+                  <div className="flex items-center gap-2 px-1 mb-2">
+                    <div className="w-1 h-3 bg-primary rounded-full" />
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">{t.filters}</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 px-1">
+                    {[
+                      { id: 'stable', icon: CheckCircle2, color: 'text-emerald-500' },
+                      { id: 'risk', icon: AlertTriangle, color: 'text-red-500' },
+                      { id: 'anomalous', icon: Radio, color: 'text-slate-500' }
+                    ].map(st => (
+                      <button
+                        key={st.id}
+                        onClick={() => toggleStatusFilter(st.id)}
+                        className={cn(
+                          "aspect-square flex flex-col items-center justify-center rounded-lg border transition-all gap-1.5",
+                          filters.statuses.includes(st.id) ? "bg-white/5 border-white/20" : "border-transparent bg-slate-900/40"
+                        )}
+                        title={st.id}
+                      >
+                        <st.icon className={cn("w-4 h-4", filters.statuses.includes(st.id) ? st.color : "text-slate-700")} />
+                        <span className="text-[7px] text-slate-500 font-bold uppercase tracking-tighter">{st.id.slice(0,3)}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="px-2 pt-2">
+                    <div className="flex justify-between items-center mb-1.5">
+                      <span className="text-[8px] text-slate-500 font-bold uppercase">ROI Minimum</span>
+                      <span className="text-[9px] font-mono text-primary font-bold">{filters.minRoi}%</span>
+                    </div>
+                    <input 
+                      type="range" min="0" max="30" value={filters.minRoi}
+                      onChange={(e) => setFilters(p => ({ ...p, minRoi: parseInt(e.target.value) }))}
+                      className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-primary"
+                    />
+                  </div>
+                </div>
+                
+                <button 
+                  onClick={() => setFilters({ statuses: ['stable', 'risk', 'anomalous'], minRoi: 0, owner: '' })}
+                  className="w-full py-2 text-[8px] text-slate-500 hover:text-primary uppercase font-bold tracking-widest border border-white/5 rounded-xl hover:bg-white/5 transition-all"
+                >
+                  Hard Reset Strategy
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+
+      {/* Global Navigation Sector (Right) */}
+      <div className="absolute right-4 sm:right-6 top-[30%] translate-y-0 flex flex-col gap-3 pointer-events-auto z-[70]">
+        
+        {/* Layer Visibility Toggle (Quick) */}
+        <div className="relative group">
           <button 
-            onClick={() => {
-              setLegendOpen(!legendOpen);
-              if (!legendOpen && window.innerWidth < 640) setChatOpen(false);
-            }}
+            onClick={() => setLayersMenuOpen(!layersMenuOpen)}
             className={cn(
-              "apple-glass rounded-lg p-1.5 flex items-center justify-center transition-all border shadow-lg",
-              legendOpen ? "bg-primary/20 border-primary/40 text-primary" : "border-white/5 text-slate-400 glass-hover"
+              "apple-glass rounded-lg w-[30px] h-[30px] flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
+              layersMenuOpen ? "bg-primary/20 border-primary/40 text-primary shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]" : "border-white/5 text-slate-500 glass-hover"
             )}
-            title="Toggle Map Legend"
+            title="Sovereign View Configuration"
           >
-            <Info className="w-3.5 h-3.5" />
+            <Layers className="w-3.5 h-3.5" />
           </button>
 
-          {/* Zoom Controls */}
-          <div className="flex flex-col items-end gap-4">
-            <div className="hidden sm:flex items-center gap-4 px-4 py-2 apple-glass rounded-xl border border-white/5 pointer-events-auto">
-              <div className="flex flex-col items-end">
-                <span className="text-[7px] text-slate-500 uppercase font-bold tracking-[0.3em]">{t.coordinates}</span>
-                <span className="text-[10px] font-mono text-primary">
-                  {mapCoords.lat.toFixed(4)}°N / {mapCoords.lon.toFixed(4)}°E
-                </span>
-              </div>
-              <div className="w-px h-6 bg-white/10" />
-              <div className="flex items-center gap-2">
-                <div className="relative">
-                  <Radio className="w-3 h-3 text-secondary pulsate-glow" />
-                  <div className="absolute inset-0 bg-secondary/20 rounded-full animate-ping" />
+          <AnimatePresence>
+            {layersMenuOpen && (
+              <motion.div
+                initial={{ opacity: 0, x: 20, scale: 0.95 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 20, scale: 0.95 }}
+                className="absolute right-full mr-3 top-0 w-56 apple-glass rounded-xl shadow-2xl border border-white/10 p-4 z-50 space-y-4"
+              >
+                <div className="space-y-3">
+                  <h4 className="text-[9px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.theme}</h4>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {basemaps.map(m => (
+                      <button
+                        key={m.id}
+                        onClick={() => {
+                          setBasemap(m.url);
+                          soundService.playClick();
+                        }}
+                        className={cn(
+                          "flex items-center gap-3 p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
+                          JSON.stringify(basemap) === JSON.stringify(m.url) ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
+                        )}
+                      >
+                        {m.icon}
+                        {m.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-                <span className="text-[8px] font-mono text-secondary uppercase tracking-widest">{t.satelliteUplink}</span>
-              </div>
-            </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
 
-            <div className="flex flex-col tactical-glass energy-border rounded-xl overflow-hidden shadow-xl pointer-events-auto">
-              <button 
-                onClick={() => {
-                  if (mapRef.current) {
-                    mapRef.current.easeTo({ zoom: viewState.zoom + 1, duration: 500 });
-                  } else {
-                    setViewState(v => ({ ...v, zoom: v.zoom + 1 }));
-                  }
-                }}
-                className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
-                title="Zoom In"
-              >
-                <Plus className="w-5 h-5" />
-              </button>
-              <button 
-                onClick={() => {
-                  if (mapRef.current) {
-                    mapRef.current.easeTo({ zoom: viewState.zoom - 1, duration: 500 });
-                  } else {
-                    setViewState(v => ({ ...v, zoom: v.zoom - 1 }));
-                  }
-                }}
-                className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
-                title="Zoom Out"
-              >
-                <Minus className="w-5 h-5" />
-              </button>
-              <button 
-                onClick={() => {
-                  if (mapRef.current) {
-                    mapRef.current.flyTo({
-                      pitch: 60,
-                      bearing: -20,
-                      duration: 1500,
-                      essential: true
-                    });
-                  } else {
-                    setViewState(v => ({ ...v, pitch: 60, bearing: -20 }));
-                  }
-                }}
-                className="p-3 hover:bg-slate-800 transition-colors text-slate-400"
-                title="Reset View"
-              >
-                <RotateCcw className="w-5 h-5" />
-              </button>
-            </div>
+        {/* Legend Toggle */}
+        <button 
+          onClick={() => setLegendOpen(!legendOpen)}
+          className={cn(
+            "apple-glass rounded-lg w-[30px] h-[30px] flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
+            legendOpen ? "bg-amber-500/20 border-amber-500/40 text-amber-500" : "border-white/5 text-slate-500 glass-hover"
+          )}
+          title="Tactical Legend"
+        >
+          <Info className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Precision Navigation (Zoom) */}
+        <div className="flex flex-col tactical-glass energy-border rounded-xl shadow-xl overflow-hidden">
+          <button 
+            onClick={() => mapRef.current?.easeTo({ zoom: viewState.zoom + 1 })}
+            className="w-[30px] h-[35px] flex items-center justify-center hover:bg-white/5 text-slate-400 border-b border-white/5"
+            title="Increase Scale"
+          >
+            <Plus className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={() => mapRef.current?.easeTo({ zoom: viewState.zoom - 1 })}
+            className="w-[30px] h-[35px] flex items-center justify-center hover:bg-white/5 text-slate-400 border-b border-white/5"
+            title="Decrease Scale"
+          >
+            <Minus className="w-4 h-4" />
+          </button>
+          <button 
+            onClick={() => mapRef.current?.flyTo({ pitch: 0, bearing: 0, duration: 800 })}
+            className="w-[30px] h-[35px] flex items-center justify-center hover:bg-white/5 text-slate-400"
+            title="Recalibrate Orientation"
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+          </button>
+        </div>
+
+        {/* Coordinates Display (Precise) */}
+        <div className="hidden sm:flex flex-col items-center gap-1 apple-glass rounded-xl border border-white/5 p-2 w-[44px] absolute -bottom-24 left-1/2 -translate-x-1/2">
+          <Radio className="w-2.5 h-2.5 text-primary pulsate-glow" />
+          <div className="flex flex-col items-center">
+            <span className="text-[6px] text-slate-500 font-mono tracking-tighter">LAT</span>
+            <span className="text-[8px] font-mono text-white">{mapCoords.lat.toFixed(3)}</span>
+          </div>
+          <div className="flex flex-col items-center">
+            <span className="text-[6px] text-slate-500 font-mono tracking-tighter">LON</span>
+            <span className="text-[8px] font-mono text-white">{mapCoords.lon.toFixed(3)}</span>
           </div>
         </div>
+      </div>
 
         {/* Hover Info Widget - Rule 2: Dynamic Data Mapping */}
         <AnimatePresence>
@@ -6419,24 +6221,45 @@ export default function App() {
                     <div className="flex items-center gap-2 mb-1">
                       <Layers className="w-3 h-3 text-slate-500" />
                       <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest">
-                        {selectedBuilding.properties.type ? t.assetType : t.elevation}
+                        {selectedBuilding.properties.type ? t.assetType : t.buildingLevels}
                       </p>
                     </div>
                     <p className="text-lg font-mono font-bold text-[var(--text-main)] uppercase">
-                      {selectedBuilding.properties.type ? t[selectedBuilding.properties.type] : `${selectedBuilding.properties.height}m`}
+                      {selectedBuilding.properties.type 
+                        ? t[selectedBuilding.properties.type] 
+                        : (selectedBuilding.properties as any).levels || Math.ceil((selectedBuilding.properties.height || 0) / 3.5) || 'N/A'}
                     </p>
                   </div>
                   <div className="bg-surface rounded-xl p-3 sm:p-4 border border-border flex flex-col justify-between">
                     <div className="flex items-center gap-2 mb-1">
-                      <Shield className="w-3 h-3 text-primary" />
-                      <p className="text-[8px] text-primary uppercase font-bold tracking-widest">{t.roiAnalysis}</p>
+                      <Zap className="w-3 h-3 text-primary" />
+                      <p className="text-[8px] text-primary uppercase font-bold tracking-widest">{t.assetHeight}</p>
                     </div>
-                    <p className={cn(
-                      "text-lg font-mono font-bold",
-                      selectedBuilding.properties.roi !== undefined ? "text-primary" : "text-slate-600 italic text-xs"
-                    )}>
-                      {selectedBuilding.properties.roi !== undefined ? `${selectedBuilding.properties.roi}%` : t.encrypted}
+                    <p className="text-lg font-mono font-bold text-primary">
+                      {selectedBuilding.properties.height || 'N/A'}<span className="text-[10px] ml-1">m</span>
                     </p>
+                  </div>
+                </div>
+
+                {/* Tactical OSM Parameters */}
+                <div className="grid grid-cols-2 gap-3 mb-6">
+                  <div className="bg-slate-950/50 rounded-xl p-3 border border-white/5">
+                    <p className="text-[7px] text-slate-500 uppercase font-bold tracking-[0.2em] mb-1">{t.roofShape}</p>
+                    <div className="flex items-center gap-2">
+                      <Sun className="w-3 h-3 text-amber-500/50" />
+                      <span className="text-[10px] font-mono text-slate-300 uppercase tracking-wider">
+                        {(selectedBuilding.properties as any).roofShape || 'Flat_Standard'}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="bg-slate-950/50 rounded-xl p-3 border border-white/5">
+                    <p className="text-[7px] text-slate-500 uppercase font-bold tracking-[0.2em] mb-1">{t.assetFootprint}</p>
+                    <div className="flex items-center gap-2">
+                      <Square className="w-3 h-3 text-primary/50" />
+                      <span className="text-[10px] font-mono text-slate-300 uppercase tracking-wider">
+                        {selectedBuilding.geometry?.type === 'Polygon' ? 'Precise_OSM' : 'Point_Raster'}
+                      </span>
+                    </div>
                   </div>
                 </div>
 
@@ -6774,16 +6597,15 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Tactical Dashboard Sidebar */}
       <AnimatePresence>
         {dashboardOpen && (
           <motion.div
             initial={{ x: -400, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -400, opacity: 0 }}
-            className="absolute left-0 sm:left-4 top-0 sm:top-20 bottom-0 sm:bottom-20 w-full sm:w-72 z-[60] flex flex-col gap-4 pointer-events-none p-4 sm:p-0 bg-base/95 sm:bg-transparent backdrop-blur-xl sm:backdrop-blur-none"
+            className="absolute left-0 sm:left-6 top-0 sm:top-56 bottom-0 sm:bottom-24 w-full sm:w-80 z-[60] flex flex-col gap-4 pointer-events-none p-4 sm:p-0"
           >
-            <div className="flex sm:hidden justify-between items-center mb-4 pointer-events-auto shrink-0">
+            <div className="flex sm:hidden justify-between items-center mb-4 pointer-events-auto shrink-0 apple-glass-dark p-4 rounded-2xl">
               <div className="flex items-center gap-3">
                 <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
                   <Building2 className="w-5 h-5 text-white" />

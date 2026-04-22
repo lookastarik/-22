@@ -82,6 +82,11 @@ async function startServer() {
     CREATE TABLE IF NOT EXISTS buildings (
       id INTEGER PRIMARY KEY,
       height REAL,
+      levels INTEGER,
+      min_height REAL,
+      roof_shape TEXT,
+      roof_height REAL,
+      role_osm TEXT,
       roi REAL,
       status INTEGER,
       owner_id TEXT,
@@ -126,16 +131,16 @@ async function startServer() {
   const buildingCount = await db.get("SELECT COUNT(*) as count FROM buildings");
   if (buildingCount.count === 0) {
     const seedData = [
-      { id: 101, height: 45, roi: 18, status: 1, owner_id: "user_1", cost: 1500000, yield: 25000, coords: [[37.6180, 55.7560], [37.6185, 55.7560], [37.6185, 55.7565], [37.6180, 55.7565], [37.6180, 55.7560]], enc: 'None', sr: 'High' },
-      { id: 102, height: 30, roi: 12, status: 1, owner_id: "user_2", cost: 800000, yield: 12000, coords: [[37.6160, 55.7550], [37.6165, 55.7550], [37.6165, 55.7555], [37.6160, 55.7555], [37.6160, 55.7550]], enc: 'None', sr: 'Medium' },
-      { id: 103, height: 60, roi: 5, status: 2, owner_id: "user_1", cost: 2200000, yield: 8000, coords: [[37.6190, 55.7540], [37.6195, 55.7540], [37.6195, 55.7545], [37.6190, 55.7545], [37.6190, 55.7540]], enc: 'Lease_Hold_Expired', sr: 'Low' },
-      { id: 104, height: 85, roi: -12, status: 3, owner_id: "user_3", cost: 4500000, yield: -5000, coords: [[37.6210, 55.7570], [37.6215, 55.7570], [37.6215, 55.7575], [37.6210, 55.7575], [37.6210, 55.7570]], enc: 'Court_Order_Active', sr: 'None' },
+      { id: 101, height: 45, levels: 12, roof_shape: 'flat', cost: 1500000, yield: 25000, coords: [[37.6180, 55.7560], [37.6185, 55.7560], [37.6185, 55.7565], [37.6180, 55.7565], [37.6180, 55.7560]], enc: 'None', sr: 'High', roi: 18, status: 1, owner_id: "user_1" },
+      { id: 102, height: 30, levels: 8, roof_shape: 'gabled', cost: 800000, yield: 12000, coords: [[37.6160, 55.7550], [37.6165, 55.7550], [37.6165, 55.7555], [37.6160, 55.7555], [37.6160, 55.7550]], enc: 'None', sr: 'Medium', roi: 12, status: 1, owner_id: "user_2" },
+      { id: 103, height: 60, levels: 15, min_height: 5, roof_shape: 'hipped', cost: 2200000, yield: 8000, coords: [[37.6190, 55.7540], [37.6195, 55.7540], [37.6195, 55.7545], [37.6190, 55.7545], [37.6190, 55.7540]], enc: 'Lease_Hold_Expired', sr: 'Low', roi: 5, status: 2, owner_id: "user_1" },
+      { id: 104, height: 85, levels: 22, roof_shape: 'mansard', cost: 4500000, yield: -5000, coords: [[37.6210, 55.7570], [37.6215, 55.7570], [37.6215, 55.7575], [37.6210, 55.7575], [37.6210, 55.7570]], enc: 'Court_Order_Active', sr: 'None', roi: -12, status: 3, owner_id: "user_3" },
     ];
 
     for (const b of seedData) {
       await db.run(
-        "INSERT INTO buildings (id, height, roi, status, owner_id, cost, yield, coordinates, encumbrances, sanctions_resist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [b.id, b.height, b.roi, b.status, b.owner_id, b.cost, b.yield, JSON.stringify(b.coords), b.enc, b.sr]
+        "INSERT INTO buildings (id, height, levels, min_height, roof_shape, roi, status, owner_id, cost, yield, coordinates, encumbrances, sanctions_resist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [b.id, b.height, b.levels, b.min_height || 0, b.roof_shape, b.roi, b.status, b.owner_id, b.cost, b.yield, JSON.stringify(b.coords), b.enc, b.sr]
       );
     }
   }
@@ -322,6 +327,9 @@ async function startServer() {
         const props: any = { 
           id: b.id,
           height: b.height,
+          levels: b.levels,
+          min_height: b.min_height,
+          roof_shape: b.roof_shape,
           cost: b.cost,
           yield: b.yield
         };

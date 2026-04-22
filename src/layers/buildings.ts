@@ -116,16 +116,30 @@ export const createBuildingsLayer = (
         }
         
         // LOD 2: Detailed height logic for close-up view
-        let height = props.height || 20;
+        let height = props.height;
+        
+        // Rule 1 & 2: OSM Extrusion Logic for Sovereign Stacks
+        // If height is missing, derive from levels (institutional default)
+        if (!height && (props.levels || props.building_levels)) {
+          height = (props.levels || props.building_levels) * 3.5;
+        }
+        
+        if (!height) height = 20; // Strategic fallback
+        
         const model = props.model;
         
         if (model) {
           switch (model) {
-            case 'office': height = 150; break;
-            case 'apartment': height = 40; break;
-            case 'warehouse': height = 15; break;
-            case 'house': height = 10; break;
+            case 'office': height = Math.max(height, 150); break;
+            case 'apartment': height = Math.max(height, 40); break;
+            case 'warehouse': height = Math.max(height, 15); break;
+            case 'house': height = Math.max(height, 10); break;
           }
+        }
+
+        // Add roof height as per user technical specs
+        if (props.roof_height) {
+          height += props.roof_height;
         }
 
         let finalHeight = height * 1.1;
@@ -148,38 +162,7 @@ export const createBuildingsLayer = (
         return finalHeight;
       },
 
-      // LOD: Simplify color and line calculations
-      getLineColor: (f: any) => {
-        const id = f?.properties?.id;
-        if (id === selectedId) {
-          // Tactical pulsating white outline
-          return [255, 255, 255, 200 + 55 * pulse];
-        }
-        if (id === hoveredId) {
-          return [0, 255, 255, 255]; // Bright cyan highlight on hover
-        }
-
-        if (investorMode) {
-          const isOwned = ownedIds.includes(id);
-          return isOwned ? [16, 185, 129, 255] : [100, 100, 100, 100]; // Emerald for owned, grey for others
-        }
-        if (dataOnlyMode) return [16, 185, 129, 200]; // Emerald for Data Only
-        if (zoom < 15) return [0, 0, 0, 0];
-        
-        const status = f?.properties?.status || 0;
-        if (status === 3) return [161, 161, 170, 200]; // Anomalous - Gray
-        if (status === 2) return [255, 255, 255, 200]; // Risk - White
-        return [255, 255, 255, 60]; // Stable - Faint White
-      },
-
-      getLineWidth: (f: any) => {
-        const id = f?.properties?.id;
-        if (id === selectedId) return 4;
-        if (id === hoveredId) return 3;
-        return 1;
-      },
-
-      // LOD: Optimized color logic to reduce per-feature computation at distance
+      // OSM Base Height implementation (min_height / building:min_level)
       getFillColor: (f: any) => {
         if (dataOnlyMode) return [16, 185, 129, 20];
         
@@ -187,17 +170,17 @@ export const createBuildingsLayer = (
         const id = props.id;
 
         // Extreme Distance LOD: Single static color
-        if (zoom < 11) return [40, 42, 54, 180];
+        if (zoom < 11) return [15, 23, 42, 180]; // Slate 900
         
-        // Medium Distance LOD: Simplified status colors, no interactivity effects
+        // Medium Distance LOD: Simplified status colors
         if (zoom < 13) {
           const status = props.status || 0;
-          if (status === 3) return [82, 82, 91, 150];
+          if (status === 3) return [71, 85, 105, 150]; // Slate 600
           if (status === 2) return [255, 255, 255, 150];
-          return [20, 20, 25, 180];
+          return [15, 23, 42, 180];
         }
 
-        // Close Zoom LOD: Full interactive logic
+        // Close Zoom LOD: Obsidian / Strategic materials
         if (props.isUserAsset) {
           return [0, 255, 255, 200]; 
         }
@@ -211,45 +194,63 @@ export const createBuildingsLayer = (
         }
 
         const status = props.status || 0;
-        if (status === 3) return [82, 82, 91, 150];
+        if (status === 3) return [71, 85, 105, 150];
         if (status === 2) return [255, 255, 255, 150];
         
-        return [15, 15, 20, 220]; 
+        return [15, 23, 42, 220]; // Deep Slate for stable assets
       },
 
+      getLineColor: (f: any) => {
+        const id = f?.properties?.id;
+        if (id === selectedId) return [255, 255, 255, 200 + 55 * pulse];
+        if (id === hoveredId) return [0, 255, 255, 255];
+        if (investorMode && ownedIds.includes(id)) return [16, 185, 129, 255];
+        return [255, 255, 255, 30];
+      },
+
+      getLineWidth: (f: any) => {
+        const id = f?.properties?.id;
+        if (id === selectedId) return 3;
+        if (id === hoveredId) return 2;
+        return 1;
+      },
+
+      // Tactical Shader Enhancements
       _subLayerProps: {
         'polygons-fill': {
           inject: {
-            'vs:#decl': 'varying float vZ; varying vec3 vNormal;',
-            'vs:#main-end': 'vZ = geometry.position.z; vNormal = geometry.worldNormal;',
-            'fs:#decl': 'varying float vZ; varying vec3 vNormal;',
+            'vs:#decl': 'varying float vZ; varying vec3 vNormal; varying float vHeight;',
+            'vs:#main-end': 'vZ = geometry.position.z; vNormal = geometry.worldNormal; vHeight = positions.z;',
+            'fs:#decl': 'varying float vZ; varying vec3 vNormal; varying float vHeight;',
             'fs:#main-end': `
               // Vertical scanline effect
               float s = sin(vZ * 0.8 - project_uTime * 2.0) * 0.5 + 0.5;
               
-              // Subtle vertical gradient for depth
-              float gradient = clamp(vZ / 100.0, 0.0, 1.0);
+              // Subtle vertical gradient for depth (Strategic Obsidian style)
+              float gradient = clamp(vZ / 120.0, 0.0, 1.0);
               
-              // Edge highlight based on normal
+              // Edge highlight based on normal (Palantir aesthetic)
               float edge = 1.0 - abs(vNormal.z);
 
               // TACTICAL RELIEF SHADING
-              // Fake directional lighting based on world normal
               vec3 lightDir = normalize(vec3(0.3, 0.5, 1.0));
               float diff = max(dot(vNormal, lightDir), 0.0) * 0.5 + 0.5;
               
-              // Ambient occlusion-like bottom darkening
-              float ao = smoothstep(0.0, 10.0, vZ) * 0.4 + 0.6;
+              // Advanced Ambient Occlusion (Bottom Darkening)
+              float ao = smoothstep(0.0, 15.0, vZ) * 0.5 + 0.5;
+              
+              // Glass Reflection / Tactical highlights
+              float reflex = pow(max(dot(reflect(-lightDir, vNormal), vec3(0,0,1)), 0.0), 16.0);
               
               gl_FragColor.rgb *= (diff * ao);
-              
-              gl_FragColor.rgb += s * ${scanlineIntensity} * 0.4;
-              gl_FragColor.rgb += edge * 0.1;
-              gl_FragColor.rgb += vec3(gradient * 0.1);
+              gl_FragColor.rgb += s * ${scanlineIntensity} * 0.3;
+              gl_FragColor.rgb += edge * 0.15;
+              gl_FragColor.rgb += vec3(reflex * 0.2);
+              gl_FragColor.rgb += vec3(gradient * 0.05);
 
-              // Hover highlight in shader
-              if (gl_FragColor.g > 0.9 && gl_FragColor.b > 0.9 && gl_FragColor.r < 0.1) {
-                gl_FragColor.rgb += s * 0.2; // Extra pulse for hovered
+              // Selection Highlight Pulse
+              if (gl_FragColor.a > 0.95 && gl_FragColor.r > 0.9 && gl_FragColor.g > 0.9) {
+                gl_FragColor.rgb += s * 0.1;
               }
             `
           }

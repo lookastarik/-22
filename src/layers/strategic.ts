@@ -1,4 +1,4 @@
-import { GeoJsonLayer } from '@deck.gl/layers';
+import { GeoJsonLayer, ColumnLayer } from '@deck.gl/layers';
 
 export const createRiskRadarLayer = (zoom: number, active: boolean, onHover: (info: any) => void) => {
   if (!active) return null;
@@ -68,6 +68,13 @@ export const createRiskRadarLayer = (zoom: number, active: boolean, onHover: (in
     stroked: true,
     filled: true,
     lineWidthMinPixels: 2,
+    extruded: true,
+    getElevation: (f: any) => {
+        if (f.properties.risk === 'Critical') return 3000;
+        if (f.properties.risk === 'Medium') return 1800;
+        return 1000;
+    },
+    elevationScale: 1,
     getFillColor: (f: any) => f.properties.color,
     getLineColor: (f: any) => [f.properties.color[0], f.properties.color[1], f.properties.color[2], 255],
     getLineWidth: 2,
@@ -87,7 +94,7 @@ export const createRiskRadarLayer = (zoom: number, active: boolean, onHover: (in
             onHover(null);
         }
     }
-  });
+  } as any);
 };
 
 export const createStrategicNodesLayer = (zoom: number, active: boolean, onHover: (info: any) => void) => {
@@ -102,17 +109,26 @@ export const createStrategicNodesLayer = (zoom: number, active: boolean, onHover
         ]
     };
 
-    return new GeoJsonLayer({
+    return new ColumnLayer({
         id: 'strategic-nodes-layer',
-        data: nodes as any,
+        data: nodes.features,
         pickable: true,
-        getPointRadius: zoom * 2,
-        pointRadiusMinPixels: 8,
-        pointRadiusMaxPixels: 30,
-        filled: true,
-        stroked: true,
-        getFillColor: [255, 255, 255, 200],
+        getPosition: (f: any) => f.geometry.coordinates,
+        radius: 30,
+        extruded: true,
+        getElevation: (f: any) => {
+            if (f.properties.risk === 'Center') return 5000; // Major landmark
+            if (f.properties.risk === 'Maximum') return 3500;
+            return 2000;
+        },
+        getFillColor: [255, 255, 255, 220],
         getLineColor: [255, 0, 0, 255],
+        material: {
+            ambient: 0.8,
+            diffuse: 0.9,
+            shininess: 100,
+            specularColor: [255, 0, 0]
+        },
         onHover: (info) => {
             if (info.object) {
                 onHover({
@@ -129,7 +145,7 @@ export const createStrategicNodesLayer = (zoom: number, active: boolean, onHover
                 onHover(null);
             }
         }
-    });
+    } as any);
 };
 
 export const createInfrastructureTwinLayer = (zoom: number, active: boolean, type: 'power' | 'comm' | 'traffic') => {
@@ -144,22 +160,34 @@ export const createInfrastructureTwinLayer = (zoom: number, active: boolean, typ
     ]
   };
 
-  return new GeoJsonLayer({
+  return new ColumnLayer({
     id: `infra-twin-${type}`,
-    data: nodes as any,
+    data: nodes.features,
     visible: active,
     pickable: true,
-    getPointRadius: 20,
-    pointRadiusMinPixels: 10,
-    filled: true,
+    getPosition: (f: any) => f.geometry.coordinates,
     getFillColor: (f: any) => {
         if (f.properties.type === 'power') return [255, 255, 0, 200];
-        return [0, 100, 255, 200];
+        return [0, 150, 255, 200];
+    },
+    getLineColor: [255, 255, 255, 100],
+    radius: 35,
+    extruded: true,
+    getElevation: (f: any) => {
+        const value = parseInt(f.properties.capacity || f.properties.signal === '5G_Extreme' ? '100' : '50');
+        return value * 25; // Massive exaggeration for "Orbital" look
+    },
+    elevationScale: 1,
+    material: {
+        ambient: 0.5,
+        diffuse: 0.6,
+        shininess: 32,
+        specularColor: [255, 255, 255]
     },
     updateTriggers: {
         getFillColor: [active]
     }
-  });
+  } as any);
 };
 
 export const createFutureProjectsLayer = (zoom: number, active: boolean, simulationYear: number, onHover: (info: any) => void) => {
@@ -214,18 +242,21 @@ export const createFutureProjectsLayer = (zoom: number, active: boolean, simulat
   // Show projects under construction: startYear <= simulationYear < endYear
   const constructionFeatures = futureProjects.features.filter(f => f.properties.startYear <= simulationYear && simulationYear < f.properties.endYear);
 
-  return new GeoJsonLayer({
+  return new ColumnLayer({
     id: 'future-projects-layer',
-    data: [...visibleFeatures, ...constructionFeatures] as any,
+    data: [...visibleFeatures, ...constructionFeatures],
     pickable: true,
-    getPointRadius: 40,
-    pointRadiusMinPixels: 15,
-    filled: true,
-    stroked: true,
-    lineWidthMinPixels: 2,
+    getPosition: (f: any) => f.geometry.coordinates,
+    radius: 40,
+    extruded: true,
+    getElevation: (f: any) => {
+        // Exaggeratd height based on impact string (+15% ROI -> 15 * 100)
+        const impactVal = parseInt(f.properties.impact.replace(/[^0-9]/g, '')) || 10;
+        return impactVal * 150;
+    },
     getFillColor: (f: any) => {
       const isUnderConstruction = f.properties.startYear <= simulationYear && simulationYear < f.properties.endYear;
-      if (isUnderConstruction) return [255, 165, 0, 150]; // Orange for construction
+      if (isUnderConstruction) return [255, 165, 0, 180]; // Orange for construction
       
       switch (f.properties.type) {
         case 'transport': return [0, 200, 255, 200];
@@ -234,7 +265,12 @@ export const createFutureProjectsLayer = (zoom: number, active: boolean, simulat
         default: return [255, 255, 255, 200];
       }
     },
-    getLineColor: [255, 255, 255, 200],
+    material: {
+      ambient: 0.6,
+      diffuse: 0.7,
+      shininess: 60,
+      specularColor: [255, 255, 255]
+    },
     updateTriggers: {
         getFillColor: [simulationYear]
     },
@@ -254,5 +290,5 @@ export const createFutureProjectsLayer = (zoom: number, active: boolean, simulat
           onHover(null);
       }
     }
-  });
+  } as any);
 };
