@@ -12,7 +12,8 @@ export const createBuildingsLayer = (
   dataOnlyMode: boolean = false,
   investorMode: boolean = false,
   ownedIds: (number | string)[] = [],
-  simulationYear: number = 2026
+  simulationYear: number = 2026,
+  simulationParams: { rentRate: number, occupancy: number, inflation: number } = { rentRate: 0, occupancy: 0, inflation: 0 }
 ) => {
   // Performance Optimization: Define granular LOD levels
   const isFar = zoom < 10;
@@ -21,21 +22,32 @@ export const createBuildingsLayer = (
   const isMediumDetail = zoom >= 13 && zoom < 15;
   const isHighDetail = zoom >= 15;
 
-  // LOD Technique: Filter data based on zoom level to reduce rendering load
-  // At lower zoom levels, we only show "significant" assets
+  const layerOpacity = zoom < 10 ? 0 : Math.min(1, (zoom - 10) / 3);
+
+  // LOD Technique: Filter data based on zoom level
   let optimizedData = data;
 
-  // Apply Simulation Year Impact
-  if (data && data.features && simulationYear > 2026) {
-    const yearDiff = simulationYear - 2026;
+  // Apply Simulation Year & Parameter Impact
+  if (data && data.features) {
+    const yearDiff = Math.max(0, simulationYear - 2026);
     optimizedData = {
       ...data,
       features: data.features.map((f: any) => {
         const baseRoi = f.properties.roi || 5;
-        // Deterministic simulation based on ID and year
-        // Buildings with specific IDs (strategic nodes) get higher growth
+        
+        // Complex simulation logic
+        let simulatedRoi = baseRoi;
+        
+        // Year impact
         const growthFactor = (parseInt(f.properties.id) % 5 === 0) ? 0.8 : 0.3;
-        const simulatedRoi = parseFloat((baseRoi + (yearDiff * growthFactor)).toFixed(1));
+        simulatedRoi += (yearDiff * growthFactor);
+        
+        // Dynamic Parameters impact
+        simulatedRoi += simulationParams.rentRate * 0.5;
+        simulatedRoi += simulationParams.occupancy * 0.2;
+        simulatedRoi -= simulationParams.inflation * 0.3;
+        
+        simulatedRoi = parseFloat(simulatedRoi.toFixed(1));
         
         return {
           ...f,
@@ -82,10 +94,11 @@ export const createBuildingsLayer = (
     new GeoJsonLayer({
       id: 'buildings-3d',
       data: optimizedData,
-      pickable: zoom >= 13, // Disable picking at low zoom for performance
+      pickable: zoom >= 13, 
       autoHighlight: false, 
+      opacity: layerOpacity,
       highlightColor: [255, 255, 255, 100],
-      stroked: zoom >= 13, // Ensure outlines are visible for hover/selection feedback
+      stroked: zoom >= 13, 
       lineWidthMinPixels: 1,
       pointRadiusMinPixels: 4,
       getPointRadius: (f: any) => f.properties.isUserAsset ? 8 : 2,
@@ -284,9 +297,9 @@ export const createBuildingsLayer = (
       },
 
       updateTriggers: {
-        getFillColor: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
-        getLineColor: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
-        getLineWidth: [pulse, selectedId, hoveredId, zoom, dataOnlyMode],
+        getFillColor: [selectedId, hoveredId, zoom, dataOnlyMode],
+        getLineColor: [selectedId, hoveredId, zoom, dataOnlyMode],
+        getLineWidth: [selectedId, hoveredId, zoom, dataOnlyMode],
         getElevation: [zoom, selectedId, hoveredId],
         extruded: [zoom],
         _subLayerProps: [scanlineIntensity]
@@ -377,7 +390,7 @@ export const createBuildingsLayer = (
                 case 'house': height = 10; break;
               }
             }
-            return height * (1.5 + 0.05 * pulse);
+            return height * 1.5;
           },
           getFillColor: [255, 255, 255, 40],
           _subLayerProps: {
@@ -393,7 +406,7 @@ export const createBuildingsLayer = (
                   
                   // Grid interaction
                   float grid = sin(vZ_holo * 0.5) * cos(vPos_holo.x * 0.1) * cos(vPos_holo.y * 0.1);
-                  float pulse_holo = sin(vZ_holo * 0.1 - project_uTime * 4.0) * 0.5 + 0.5;
+                  float pulse_val = sin(vZ_holo * 0.1 - project_uTime * 4.0) * 0.5 + 0.5;
 
                   // Rotating Beacon Effect (Scanning Radar)
                   float angle = atan(vPos_holo.y, vPos_holo.x);
@@ -402,19 +415,20 @@ export const createBuildingsLayer = (
                   
                   gl_FragColor.rgb += beam1 * 0.8;
                   gl_FragColor.rgb += beam2 * 0.4;
-                  gl_FragColor.rgb += pulse_holo * 0.1;
+                  gl_FragColor.rgb += pulse_val * 0.1;
                   gl_FragColor.rgb += beacon * 0.6;
-                  gl_FragColor.rgb += grid * 0.05 * pulse_holo;
+                  gl_FragColor.rgb += grid * 0.05 * pulse_val;
                   
                   // Hologram transparency
-                  gl_FragColor.a *= (0.4 + 0.4 * ${pulse});
+                  float pulse_anim = (sin(project_uTime * 3.0) + 1.0) / 2.0;
+                  gl_FragColor.a *= (0.4 + 0.4 * pulse_anim);
                 `
               }
             }
           },
           updateTriggers: {
-            getElevation: [pulse],
-            getFillColor: [pulse]
+            getElevation: [selectedId],
+            getFillColor: [selectedId]
           }
         } as any)
       );
@@ -431,7 +445,7 @@ export const createBuildingsLayer = (
           filled: false,
           stroked: true,
           lineWidthMinPixels: 2,
-          getLineColor: [255, 255, 255, 150 * (1 - pulse)],
+          getLineColor: [255, 255, 255, 100],
           getLineWidth: 2,
           _subLayerProps: {
             'polygons-stroke': {
@@ -443,13 +457,14 @@ export const createBuildingsLayer = (
                   float dist = length(vPos);
                   float ring1 = smoothstep(0.1, 0.0, abs(fract(dist * 0.05 - project_uTime * 1.0) - 0.5));
                   float ring2 = smoothstep(0.1, 0.0, abs(fract(dist * 0.03 - project_uTime * 0.7) - 0.5));
-                  gl_FragColor.a *= (ring1 + ring2 * 0.5);
+                  float pulse_val = (sin(project_uTime * 3.0) + 1.0) / 2.0;
+                  gl_FragColor.a *= (ring1 + ring2 * 0.5) * (1.0 - pulse_val);
                 `
               }
             }
           },
           updateTriggers: {
-            getLineColor: [pulse]
+            getLineColor: [selectedId]
           }
         } as any)
       );
@@ -477,9 +492,9 @@ export const createBuildingsLayer = (
               case 'house': height = 10; break;
             }
           }
-          return height * (1.5 + 0.05 * pulse) * 1.02;
+          return height * 1.5 * 1.02;
         },
-        getLineColor: [255, 255, 255, 100 + 155 * pulse],
+        getLineColor: [255, 255, 255, 200],
         getLineWidth: 6,
         _subLayerProps: {
           'polygons-stroke': {
@@ -496,8 +511,8 @@ export const createBuildingsLayer = (
           }
         },
         updateTriggers: {
-          getLineColor: [pulse],
-          getElevation: [pulse]
+          getLineColor: [selectedId],
+          getElevation: [selectedId]
         }
       } as any)
     );
@@ -571,7 +586,7 @@ export const createBuildingsLayer = (
               finalH = h * (1 - ltv) * 2;
             }
 
-            if (f.properties.id === selectedId) finalH = finalH * (1.3 + 0.05 * pulse);
+            if (f.properties.id === selectedId) finalH = finalH * 1.35;
             else if (f.properties.id === hoveredId) finalH = finalH * 1.15;
             
             return [lng, lat, finalH + 15]; // Positioned above the building
@@ -590,7 +605,7 @@ export const createBuildingsLayer = (
           borderWidth: 1,
           getBorderColor: (f: any) => f.properties.id === selectedId ? [255, 255, 255, 100] : [0, 255, 255, 100],
           updateTriggers: {
-            getPosition: [pulse, selectedId, hoveredId, zoom, investorMode, ownedIds],
+            getPosition: [selectedId, hoveredId, zoom, investorMode, ownedIds],
             getColor: [selectedId, hoveredId],
             getBorderColor: [selectedId, hoveredId]
           }

@@ -2,7 +2,7 @@ import * as React from 'react';
 import { useState, useMemo, useEffect, useCallback, useRef, Component, ErrorInfo, ReactNode } from 'react';
 import { Map, useControl, Layer, MapRef, Marker, Source, NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
 import { MapboxOverlay, MapboxOverlayProps } from '@deck.gl/mapbox';
-import { LightingEffect, AmbientLight, _SunLight as SunLight } from '@deck.gl/core';
+import { LightingEffect, AmbientLight, DirectionalLight } from '@deck.gl/core';
 import { createBuildingsLayer } from './layers/buildings';
 import { createTrafficLayer, processRoadsToTrips } from './layers/traffic';
 import { createRiskRadarLayer, createInfrastructureTwinLayer, createFutureProjectsLayer, createStrategicNodesLayer } from './layers/strategic';
@@ -12,6 +12,11 @@ import { soundService } from './services/soundService';
 import { PathLayer } from '@deck.gl/layers';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import * as h3 from 'h3-js';
+import axios from 'axios';
+import { saveAs } from 'file-saver';
+import { jsPDF } from 'jspdf';
+import * as XLSX from 'xlsx';
+import { toPng } from 'html-to-image';
 // Firebase removed - using local SQLite via API
 import { 
   Building2, 
@@ -692,12 +697,71 @@ const DigitalMapHUD = ({ coords }: { coords: { lat: number, lon: number } }) => 
   );
 };
 
-function DeckGLOverlay(props: MapboxOverlayProps) {
-  const overlay = useControl<MapboxOverlay>(() => new MapboxOverlay(props));
+function DeckGLOverlay({ layers, effects, showTraffic }: { layers: any[], effects?: any[], showTraffic?: boolean }) {
+  // Use map context to patch for MapLibre 5 compatibility if needed
+  const overlay = useControl<MapboxOverlay>(({ map }) => {
+    // MapLibre 5 style object changed, creating a shim for shaderPreludeCode
+    // which some Deck.gl internals might still look for even in non-interleaved mode
+    if (map?.style && (map.style as any)._style && !(map.style as any)._style.shaderPreludeCode) {
+      (map.style as any)._style.shaderPreludeCode = '';
+    }
+    return new MapboxOverlay({ interleaved: false });
+  });
   
+  const frameRef = useRef<number>(null);
+  const layersRef = useRef(layers);
+  const effectsRef = useRef(effects);
+
+  // Sync refs to use in animation loop without closing over stale props
   useEffect(() => {
-    overlay.setProps(props);
-  }, [props, overlay]);
+    layersRef.current = layers;
+    effectsRef.current = effects;
+  }, [layers, effects]);
+
+  useEffect(() => {
+    let isMounted = true;
+    let isRunning = false;
+
+    const updateOverlay = (time: number) => {
+      if (!isMounted || isRunning) return;
+      
+      try {
+        isRunning = true;
+        const processedLayers = layersRef.current.filter(Boolean).map(l => {
+          if (l?.id === 'traffic-trips') {
+            return l.clone({ currentTime: time });
+          }
+          return l;
+        });
+        
+        overlay.setProps({ layers: processedLayers, effects: effectsRef.current });
+      } catch (err) {
+        // Silently handle "already running" or "shaderPreludeCode" errors
+        // By the time the next frame hits, the state usually clears
+      } finally {
+        isRunning = false;
+      }
+    };
+
+    const animate = () => {
+      if (!isMounted) return;
+      const time = (performance.now() / 50) % 1000;
+      updateOverlay(time);
+      frameRef.current = requestAnimationFrame(animate);
+    };
+
+    if (showTraffic) {
+      frameRef.current = requestAnimationFrame(animate);
+    } else {
+      // Just one static update
+      updateOverlay(0);
+    }
+
+    return () => {
+      isMounted = false;
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+    };
+  }, [showTraffic, overlay]);
 
   return null;
 }
@@ -1318,7 +1382,7 @@ const DeepDiveTerminal = ({ asset, portfolioDetailed = [], onClose }: any) => {
                 </div>
               </div>
               <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
-                <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Lidar Scan Analysis</h4>
+                <h4 className="text-[10px] text-white uppercase tracking-widest mb-4">Satellite Image Analysis</h4>
                 <div className="aspect-square bg-black/40 rounded flex items-center justify-center relative">
                    <div className="absolute inset-0 border border-primary/10 rounded" />
                    <Radar className="w-8 h-8 text-primary/20 animate-spin-slow" />
@@ -2735,12 +2799,15 @@ export default function App() {
     document.documentElement.setAttribute('data-mode', mode);
     document.documentElement.setAttribute('data-theme', colorScheme);
     
-    // Update basemap based on mode
-    if (mode === 'light') {
-      setBasemap('https://basemaps.cartocdn.com/gl/positron-gl-style/style.json');
-    } else {
-      setBasemap('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
-    }
+    // Update basemap based on mode ONLY if it is currently a standard basemap
+    setBasemap(prev => {
+      // If prev is an object, it is a custom 3D mode, don't reset it
+      if (typeof prev === 'object') return prev;
+      
+      return mode === 'light' 
+        ? 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
+        : 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+    });
   }, [mode, colorScheme]);
 
   // Hide logo splash after delay
@@ -2757,7 +2824,7 @@ export default function App() {
   const [pulse, setPulse] = useState(0);
   const [showTraffic, setShowTraffic] = useState(true);
   const [showHexGrid, setShowHexGrid] = useState(false);
-  const [trafficTime, setTrafficTime] = useState(0);
+  // trafficTime removed from state to prevent 60fps App re-renders
   const [syndicates, setSyndicates] = useState<Syndicate[]>([]);
   const [activeSyndicateId, setActiveSyndicateId] = useState<string | null>(null);
   const [syndicateRoomOpen, setSyndicateRoomOpen] = useState(false);
@@ -3042,21 +3109,122 @@ export default function App() {
     owner: ''
   });
   const [dashboardOpen, setDashboardOpen] = useState(true);
+  const [simulationParams, setSimulationParams] = useState({ rentRate: 0, occupancy: 0, inflation: 0 });
+  const [isMuted, setIsMuted] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
+  const [heatMapMode, setHeatMapMode] = useState<'none' | 'pedestrian' | 'price' | 'risk'>('none');
+
+  useEffect(() => {
+    soundService.setMuted(isMuted);
+  }, [isMuted]);
+
+  const handleGeocode = async () => {
+    if (!newAsset.address) return;
+    setIsGeocoding(true);
+    try {
+      const response = await axios.get(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(newAsset.address)}&limit=1`);
+      if (response.data && response.data.length > 0) {
+        const { lat, lon } = response.data[0];
+        setNewAsset(prev => ({ ...prev, latitude: parseFloat(lat), longitude: parseFloat(lon) }));
+        setViewState(v => ({ 
+          ...v, 
+          latitude: parseFloat(lat), 
+          longitude: parseFloat(lon), 
+          zoom: 17,
+          transitionDuration: 1500
+        }));
+        soundService.playSonar();
+      }
+    } catch (error) {
+      console.error('Geocoding failure', error);
+      soundService.playDenied();
+    } finally {
+      setIsGeocoding(false);
+    }
+  };
+
+  const handleExportPDF = () => {
+    const doc = new jsPDF();
+    doc.setFontSize(22);
+    doc.text("INVESTMENT MEMORANDUM", 105, 20, { align: 'center' });
+    doc.setFontSize(10);
+    doc.text(`Strategic Report Generated: ${new Date().toLocaleString()}`, 105, 30, { align: 'center' });
+    doc.text(`Authority: ${user?.email || 'Institutional_Unit'}`, 20, 45);
+    
+    doc.setFontSize(14);
+    doc.text("Portfolio Summary", 20, 60);
+    doc.setFontSize(10);
+    doc.text(`Market Liquidity: $${balance.toLocaleString()}`, 20, 70);
+    doc.text(`Aggregate Asset Value: $${portfolioValue.toLocaleString()}`, 20, 75);
+    doc.text(`ROI Effect Index: ${(simulationParams.rentRate * 0.5).toFixed(2)}%`, 20, 80);
+
+    doc.setFontSize(14);
+    doc.text("Strategic Assets", 20, 95);
+    portfolioDetailed.slice(0, 10).forEach((asset, i) => {
+      doc.setFontSize(10);
+      doc.text(`${i+1}. ${asset.title} - $${asset.cost.toLocaleString()} (ROI: ${asset.roi}%)`, 20, 105 + (i * 8));
+    });
+
+    doc.save(`Investment_Memorandum_${Date.now()}.pdf`);
+    soundService.playSuccess();
+  };
+
+  const handleExportExcel = () => {
+    const ws = XLSX.utils.json_to_sheet(portfolioDetailed);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Strategic_Assets");
+    XLSX.writeFile(wb, `Yard_Asset_Ledger_${Date.now()}.xlsx`);
+    soundService.playSuccess();
+  };
+
+  const handleExportScreenshot = () => {
+    const mapElement = document.getElementById('strategic-map-container');
+    if (mapElement) {
+      toPng(mapElement)
+        .then((dataUrl) => {
+          saveAs(dataUrl, `Tactical_Screen_${Date.now()}.png`);
+          soundService.playSuccess();
+        })
+        .catch((err) => {
+          console.error('Snapshot failure', err);
+          soundService.playDenied();
+        });
+    }
+  };
+
+  // Floating Particles for Sci-fi Atmosphere
+  const FloatingParticles = () => (
+    <div className="absolute inset-0 pointer-events-none overflow-hidden z-20">
+      {[...Array(20)].map((_, i) => (
+        <motion.div
+          key={i}
+          initial={{ 
+            x: Math.random() * (typeof window !== 'undefined' ? window.innerWidth : 1000), 
+            y: Math.random() * (typeof window !== 'undefined' ? window.innerHeight : 1000),
+            opacity: Math.random() * 0.5
+          }}
+          animate={{ 
+            y: [null, -100],
+            opacity: [0, 0.4, 0],
+            scale: [0.5, 1, 0.5]
+          }}
+          transition={{ 
+            duration: Math.random() * 10 + 10, 
+            repeat: Infinity,
+            ease: "linear"
+          }}
+          className="absolute w-1 h-1 bg-primary rounded-full blur-[1px]"
+        />
+      ))}
+    </div>
+  );
   const [gridBrightness, setGridBrightness] = useState(0.1);
   const [scanlineIntensity, setScanlineIntensity] = useState(0.3);
   const [buildingScanlineIntensity, setBuildingScanlineIntensity] = useState(0.2);
 
-  // Traffic Animation Loop
+  // Traffic Animation Loop - Removed from App to prevent performance crashes
   useEffect(() => {
-    let animationFrame: number;
-    const animate = () => {
-      setTrafficTime(prev => prev + 1);
-      animationFrame = requestAnimationFrame(animate);
-    };
-    if (showTraffic) {
-      animationFrame = requestAnimationFrame(animate);
-    }
-    return () => cancelAnimationFrame(animationFrame);
+    // Handled internally in DeckGLOverlay or via project_uTime
   }, [showTraffic]);
 
   // Fetch Roads for Traffic Simulation
@@ -3119,15 +3287,16 @@ export default function App() {
       intensity: 0.6
     });
 
-    const sunLight = new SunLight({
+    const sunLight = new DirectionalLight({
       color: [255, 255, 255],
       intensity: 2.8,
-      _shadow: true,
-      timestamp: 0
+      direction: [0, -70, 100]
     });
 
     return new LightingEffect({ ambientLight, sunLight });
   }, []);
+
+  const deckEffects = useMemo(() => [lightingEffect], [lightingEffect]);
 
   // Global interaction listener
   useEffect(() => {
@@ -3318,15 +3487,10 @@ export default function App() {
 
   const t = translations[language];
 
-  // Pulse timer for tactical animations
+  // Pulse timer for tactical animations - Removed for high-performance GPU-only animation
+  // If you need pulse in React state, consider slowing it down (e.g. 500ms)
   useEffect(() => {
-    let frame: number;
-    const update = () => {
-      setPulse((Math.sin(Date.now() / 600) + 1) / 2);
-      frame = requestAnimationFrame(update);
-    };
-    frame = requestAnimationFrame(update);
-    return () => cancelAnimationFrame(frame);
+    // No-op: handled in shaders via project_uTime
   }, []);
 
   const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
@@ -3816,13 +3980,15 @@ export default function App() {
             "attribution": "Esri"
           }
         },
-        layers: [{
-          "id": "simple-tiles",
-          "type": "raster",
-          "source": "raster-tiles",
-          "minzoom": 0,
-          "maxzoom": 22
-        }]
+        layers: [
+          {
+            "id": "satellite-base",
+            "type": "raster",
+            "source": "raster-tiles",
+            "minzoom": 0,
+            "maxzoom": 22
+          }
+        ]
       },
       icon: <Satellite className="w-3.5 h-3.5" />
     },
@@ -3832,7 +3998,7 @@ export default function App() {
   const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' }), []);
 
   // Rule 1: "Quiet" Frontend - Layers
-  const layers = useMemo(() => [
+  const staticLayers = useMemo(() => [
     showGrid ? new PathLayer({
       id: 'tactical-grid-map',
       data: gridLines,
@@ -3910,14 +4076,15 @@ export default function App() {
       dataOnlyMode,
       investorCabinetOpen,
       portfolio,
-      simulationYear
+      simulationYear,
+      simulationParams
     ) : null,
     showTraffic && roadsData.length > 0 ? createTrafficLayer(
       roadsData,
-      trafficTime,
+      0, // Time handled in overlay component
       showTraffic
     ) : null
-  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, hoverInfo, viewState.zoom, buildingScanlineIntensity, dataOnlyMode, investorCabinetOpen, portfolio, showTraffic, roadsData, trafficTime, showHexGrid, hexDistricts, showRiskRadar, showInfraPower, showInfraComm, showFutureProjects, simulationYear]);
+  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, hoverInfo, viewState.zoom, buildingScanlineIntensity, dataOnlyMode, investorCabinetOpen, portfolio, showTraffic, roadsData, showHexGrid, hexDistricts, showRiskRadar, showInfraPower, showInfraComm, showFutureProjects, simulationYear, simulationParams]);
 
   const handleCreateSyndicate = (building: BuildingInfo) => {
     if (!user) {
@@ -4479,6 +4646,7 @@ export default function App() {
       <div className="relative w-full h-screen bg-base overflow-hidden font-sans text-slate-200">
       
       {/* Cinematic Overlays */}
+      <FloatingParticles />
       {uiStyle === 'tactical' && (
         <>
           <div className="cinematic-overlay" />
@@ -4802,6 +4970,9 @@ export default function App() {
           mapStyle={dataOnlyMode ? 'https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json' : basemap}
           style={{ width: '100%', height: '100%' }}
           onLoad={handleMapLoad}
+          maxPitch={85}
+          terrain={typeof basemap === 'object' && basemap.terrain ? basemap.terrain : undefined}
+          projection={typeof basemap === 'object' ? 'globe' : 'mercator'}
           reuseMaps
         >
           <NavigationControl position="top-right" />
@@ -4922,7 +5093,7 @@ export default function App() {
               'fill-extrusion-vertical-gradient': true
             }}
           />
-          <DeckGLOverlay layers={layers} effects={[lightingEffect]} />
+          {staticLayers.length > 0 && <DeckGLOverlay layers={staticLayers} effects={deckEffects} showTraffic={showTraffic} />}
         </Map>
 
         {isAutoRotating && (
@@ -5422,6 +5593,24 @@ export default function App() {
                       />
                     </div>
 
+                    <div className="space-y-3 pt-4 border-t border-white/5">
+                      <div className="flex items-center justify-between px-1">
+                        <div className="flex items-center gap-2">
+                          <Radio className="w-3 h-3 text-slate-500" />
+                          <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">Tactical Audio</label>
+                        </div>
+                        <button 
+                          onClick={() => setIsMuted(!isMuted)}
+                          className={cn(
+                            "px-3 py-1 rounded-md text-[8px] font-bold uppercase tracking-widest border transition-all",
+                            !isMuted ? "bg-emerald-500/10 border-emerald-500/30 text-emerald-400" : "bg-red-500/10 border-red-500/30 text-red-400"
+                          )}
+                        >
+                          {!isMuted ? 'ACTIVE' : 'MUTED'}
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="space-y-3">
                       <div className="flex justify-between items-center px-1">
                         <div className="flex items-center gap-2">
@@ -5574,7 +5763,83 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* 3. Strategic Filtering */}
+                {/* 3. Neural Simulation Suite */}
+                <div className="space-y-3 pt-4 border-t border-white/5">
+                  <div className="flex items-center gap-2 px-1 mb-2">
+                    <div className="w-1 h-3 bg-amber-500 rounded-full" />
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest italic animate-pulse">Neural_Simulation_FC</span>
+                  </div>
+                  
+                  <div className="space-y-4 px-1">
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[8px] text-slate-500 font-bold uppercase">Rent Rate Base</span>
+                        <span className={cn("text-[8px] font-mono font-bold", simulationParams.rentRate >= 0 ? "text-emerald-400" : "text-red-400")}>
+                          {simulationParams.rentRate > 0 ? '+' : ''}{simulationParams.rentRate * 10}%
+                        </span>
+                      </div>
+                      <input 
+                        type="range" min="-5" max="10" step="1" value={simulationParams.rentRate}
+                        onChange={(e) => setSimulationParams(p => ({ ...p, rentRate: parseInt(e.target.value) }))}
+                        className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[8px] text-slate-500 font-bold uppercase">Occupancy Forecast</span>
+                        <span className={cn("text-[8px] font-mono font-bold", simulationParams.occupancy >= 0 ? "text-emerald-400" : "text-red-400")}>
+                          {simulationParams.occupancy > 0 ? '+' : ''}{simulationParams.occupancy * 5}%
+                        </span>
+                      </div>
+                      <input 
+                        type="range" min="-10" max="10" step="1" value={simulationParams.occupancy}
+                        onChange={(e) => setSimulationParams(p => ({ ...p, occupancy: parseInt(e.target.value) }))}
+                        className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-secondary"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <div className="flex justify-between items-center">
+                        <span className="text-[8px] text-slate-500 font-bold uppercase">Inflation Drift</span>
+                        <span className={cn("text-[8px] font-mono font-bold", simulationParams.inflation <= 0 ? "text-emerald-400" : "text-red-400")}>
+                          {simulationParams.inflation > 0 ? '+' : ''}{simulationParams.inflation * 2}%
+                        </span>
+                      </div>
+                      <input 
+                        type="range" min="-5" max="15" step="1" value={simulationParams.inflation}
+                        onChange={(e) => setSimulationParams(p => ({ ...p, inflation: parseInt(e.target.value) }))}
+                        className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-amber-500"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 4. Strategic Data Export */}
+                <div className="space-y-3 pt-4 border-t border-white/5">
+                  <div className="flex items-center gap-2 px-1 mb-2">
+                    <div className="w-1 h-3 bg-white/20 rounded-full" />
+                    <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest">Institutional_Exports</span>
+                  </div>
+                  <div className="grid grid-cols-1 gap-1.5">
+                    {[
+                      { icon: FileText, label: 'Investment Memorandum (PDF)', action: handleExportPDF },
+                      { icon: Database, label: 'Asset Data Ledger (XLSX)', action: handleExportExcel },
+                      { icon: Camera, label: 'Tactical Snapshot (PNG)', action: handleExportScreenshot }
+                    ].map((btn, i) => (
+                      <button
+                        key={i}
+                        onClick={btn.action}
+                        className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-slate-300 transition-all text-left group"
+                      >
+                        <btn.icon className="w-3.5 h-3.5 text-slate-500 group-hover:text-primary transition-colors" />
+                        <span className="text-[9px] font-display font-medium uppercase tracking-wider">{btn.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                
+                {/* 5. Strategic Filtering */}
                 <div className="space-y-3 pt-4 border-t border-white/5">
                   <div className="flex items-center gap-2 px-1 mb-2">
                     <div className="w-1 h-3 bg-primary rounded-full" />
@@ -6989,6 +7254,17 @@ export default function App() {
                          className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
                          placeholder="Enter location address..."
                        />
+                       <button 
+                         onClick={handleGeocode}
+                         disabled={isGeocoding || !newAsset.address}
+                         className={cn(
+                           "px-3 bg-secondary/10 hover:bg-secondary/20 border border-secondary/30 rounded-xl flex items-center justify-center text-secondary transition-all",
+                           isGeocoding && "animate-pulse"
+                         )}
+                         title="Convert Address to Coordinates"
+                       >
+                         {isGeocoding ? <RotateCcw className="w-4 h-4 animate-spin" /> : <MapPin className="w-4 h-4" />}
+                       </button>
                        <button 
                          onClick={handleSuggestAssetType}
                          disabled={isSuggesting || !newAsset.address || newAsset.cost <= 0}
