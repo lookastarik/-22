@@ -24,35 +24,49 @@ export const createBuildingsLayer = (
 
   const layerOpacity = zoom < 10 ? 0 : Math.min(1, (zoom - 10) / 3);
 
-  // LOD Technique: Filter data based on zoom level
-  let optimizedData = data;
+  // Aggressive Data Normalization for GeoJSON integrity
+  if (!data) return [];
+  
+  const normalizedData = {
+    type: 'FeatureCollection',
+    features: (data.features || (Array.isArray(data) ? data : [])).map((f: any) => ({
+      type: 'Feature',
+      ...f,
+      geometry: f.geometry || { type: 'Point', coordinates: [0, 0] }
+    }))
+  };
+
+  let processedData = normalizedData;
+  let optimizedData = processedData;
 
   // Apply Simulation Year & Parameter Impact
-  if (data && data.features) {
+  if (processedData.features.length > 0) {
     const yearDiff = Math.max(0, simulationYear - 2026);
     optimizedData = {
-      ...data,
-      features: data.features.map((f: any) => {
-        const baseRoi = f.properties.roi || 5;
+      ...processedData,
+      features: processedData.features.map((f: any) => {
+        const baseRoi = f.properties?.roi || 5;
         
         // Complex simulation logic
         let simulatedRoi = baseRoi;
         
         // Year impact
-        const growthFactor = (parseInt(f.properties.id) % 5 === 0) ? 0.8 : 0.3;
+        const idStr = String(f.properties?.id || '0');
+        const idNum = parseInt(idStr) || 0;
+        const growthFactor = (idNum % 5 === 0) ? 0.8 : 0.3;
         simulatedRoi += (yearDiff * growthFactor);
         
         // Dynamic Parameters impact
-        simulatedRoi += simulationParams.rentRate * 0.5;
-        simulatedRoi += simulationParams.occupancy * 0.2;
-        simulatedRoi -= simulationParams.inflation * 0.3;
+        simulatedRoi += (simulationParams?.rentRate || 0) * 0.5;
+        simulatedRoi += (simulationParams?.occupancy || 0) * 0.2;
+        simulatedRoi -= (simulationParams?.inflation || 0) * 0.3;
         
         simulatedRoi = parseFloat(simulatedRoi.toFixed(1));
         
         return {
           ...f,
           properties: {
-            ...f.properties,
+            ...(f.properties || {}),
             simulatedRoi,
             originalRoi: baseRoi,
             isSimulated: true
@@ -62,29 +76,29 @@ export const createBuildingsLayer = (
     };
   }
   
-  if (optimizedData && optimizedData.features) {
+  if (optimizedData.features.length > 0) {
     if (isFar) {
       // Only show Landmarks or Billion-dollar assets
       optimizedData = {
-        ...data,
-        features: data.features.filter((f: any) => 
-          f.properties.status === 3 || (f.properties.cost && f.properties.cost > 1000000000)
+        ...optimizedData,
+        features: optimizedData.features.filter((f: any) => 
+          f.properties?.status === 3 || (f.properties?.cost && f.properties?.cost > 1000000000)
         )
       };
     } else if (isVeryLowDetail) {
       // Only show top-tier or anomalous assets
       optimizedData = {
-        ...data,
-        features: data.features.filter((f: any) => 
-          f.properties.status >= 2 || (f.properties.cost && f.properties.cost > 500000000)
+        ...optimizedData,
+        features: optimizedData.features.filter((f: any) => 
+          f.properties?.status >= 2 || (f.properties?.cost && f.properties?.cost > 500000000)
         )
       };
     } else if (isLowDetail) {
       // Filter out small, low-value assets
       optimizedData = {
-        ...data,
-        features: data.features.filter((f: any) => 
-          f.properties.status >= 1 || (f.properties.cost && f.properties.cost > 100000000)
+        ...optimizedData,
+        features: optimizedData.features.filter((f: any) => 
+          f.properties?.status >= 1 || (f.properties?.cost && f.properties?.cost > 100000000)
         )
       };
     }
@@ -231,13 +245,19 @@ export const createBuildingsLayer = (
       // Tactical Shader Enhancements
       _subLayerProps: {
         'polygons-fill': {
+          getUniforms: () => ({
+            uScanlineIntensity: scanlineIntensity
+          }),
           inject: {
-            'vs:#decl': 'varying float vZ; varying vec3 vNormal; varying float vHeight;',
-            'vs:#main-end': 'vZ = geometry.position.z; vNormal = geometry.worldNormal; vHeight = positions.z;',
-            'fs:#decl': 'varying float vZ; varying vec3 vNormal; varying float vHeight;',
+            'vs:#decl': 'varying float vZ; varying vec3 vNormal; varying float vHeight; varying float vPulse;',
+            'vs:#main-end': 'vZ = geometry.position.z; vNormal = geometry.worldNormal; vHeight = positions.z; vPulse = sin(geometry.position.z * 0.8 - project_uTime * 2.0) * 0.5 + 0.5;',
+            'fs:#decl': 'varying float vZ; varying vec3 vNormal; varying float vHeight; varying float vPulse; uniform float uScanlineIntensity;',
             'fs:#main-end': `
-              // Vertical scanline effect
-              float s = sin(vZ * 0.8 - project_uTime * 2.0) * 0.5 + 0.5;
+              // Early exit for low zoom to save GPU cycles on distant geometry
+              if (vHeight < 0.1) discard; 
+
+              // Vertical scanline effect - moved sin calculation to vertex shader
+              float s = vPulse;
               
               // Subtle vertical gradient for depth (Strategic Obsidian style)
               float gradient = clamp(vZ / 120.0, 0.0, 1.0);
@@ -253,10 +273,15 @@ export const createBuildingsLayer = (
               float ao = smoothstep(0.0, 15.0, vZ) * 0.5 + 0.5;
               
               // Glass Reflection / Tactical highlights
-              float reflex = pow(max(dot(reflect(-lightDir, vNormal), vec3(0,0,1)), 0.0), 16.0);
+              // Optimized: Replace pow(x, 16.0) with x*x*x*x (x^4) and then x^4 * x^4 for x^16 approx
+              float spec = max(dot(reflect(-lightDir, vNormal), vec3(0,0,1)), 0.0);
+              float spec2 = spec * spec;
+              float spec4 = spec2 * spec2;
+              float reflex = spec4 * spec4; // x^8
+              reflex = reflex * reflex; // x^16
               
               gl_FragColor.rgb *= (diff * ao);
-              gl_FragColor.rgb += s * ${scanlineIntensity} * 0.3;
+              gl_FragColor.rgb += s * uScanlineIntensity * 0.3;
               gl_FragColor.rgb += edge * 0.15;
               gl_FragColor.rgb += vec3(reflex * 0.2);
               gl_FragColor.rgb += vec3(gradient * 0.05);
@@ -317,7 +342,7 @@ export const createBuildingsLayer = (
 
   // Add a subtle hover hologram
   if (hoveredId !== null && hoveredId !== selectedId && isHighDetail) {
-    const hoveredFeature = data.features.find((f: any) => f.properties.id === hoveredId);
+    const hoveredFeature = optimizedData.features.find((f: any) => f.properties.id === hoveredId);
     if (hoveredFeature) {
       layers.push(
         new GeoJsonLayer({
@@ -367,7 +392,7 @@ export const createBuildingsLayer = (
 
   // Add a "Holographic" scanning effect for the selected building
   if (selectedId !== null && isHighDetail) {
-    const selectedFeature = data.features.find((f: any) => f.properties.id === selectedId);
+    const selectedFeature = optimizedData.features.find((f: any) => f.properties.id === selectedId);
     if (selectedFeature) {
       layers.push(
         new GeoJsonLayer({
@@ -475,7 +500,7 @@ export const createBuildingsLayer = (
         id: 'selection-glow',
         data: {
           type: 'FeatureCollection',
-          features: data.features.filter((f: any) => f.properties.id === selectedId)
+          features: optimizedData.features.filter((f: any) => f.properties.id === selectedId)
         },
         extruded: true,
         filled: false,
@@ -522,7 +547,7 @@ export const createBuildingsLayer = (
     layers.push(
       new TextLayer({
         id: 'roi-labels',
-        data: data.features,
+        data: optimizedData.features,
         getPosition: (f: any) => {
           const coords = f.geometry.coordinates;
           const [lng, lat] = f.geometry.type === 'Polygon' ? coords[0][0] : coords;
@@ -555,7 +580,7 @@ export const createBuildingsLayer = (
 
   // Tactical Asset ID Badge (Overlay on map)
   if ((hoveredId || selectedId) && isHighDetail) {
-    const activeFeatures = data.features.filter((f: any) => 
+    const activeFeatures = optimizedData.features.filter((f: any) => 
       f.properties.id === hoveredId || f.properties.id === selectedId
     );
     

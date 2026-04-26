@@ -33,10 +33,17 @@ export class ThreeProjectLayer implements CustomLayerInterface {
   private raycaster: THREE.Raycaster;
   private mouse: THREE.Vector2;
   private modelGroups: Map<string, THREE.Group> = new Map();
+  private onLoadingProgress: (status: { total: number, loaded: number }) => void;
+  private loadedCount: number = 0;
 
-  constructor(projects: ProjectModel[], onHover: (project: ProjectModel | null) => void) {
+  constructor(
+    projects: ProjectModel[], 
+    onHover: (project: ProjectModel | null) => void,
+    onLoadingProgress: (status: { total: number, loaded: number }) => void
+  ) {
     this.projects = projects;
     this.onHover = onHover;
+    this.onLoadingProgress = onLoadingProgress;
     this.loader = new GLTFLoader();
     this.raycaster = new THREE.Raycaster();
     this.mouse = new THREE.Vector2();
@@ -63,7 +70,7 @@ export class ThreeProjectLayer implements CustomLayerInterface {
     directionalLight.position.set(0, -70, 100).normalize();
     this.scene.add(directionalLight);
 
-    // Load models
+        // Load models
     this.projects.forEach((project) => {
       this.loader.load(project.url, (gltf) => {
         const model = gltf.scene;
@@ -104,6 +111,8 @@ export class ThreeProjectLayer implements CustomLayerInterface {
 
         this.scene?.add(group);
         this.modelGroups.set(project.id, group);
+        this.loadedCount++;
+        this.onLoadingProgress({ total: this.projects.length, loaded: this.loadedCount });
       }, undefined, (error) => {
         console.error(`Error loading model for project ${project.name}:`, error);
         // Fallback: Create a tactical box if model fails
@@ -143,6 +152,8 @@ export class ThreeProjectLayer implements CustomLayerInterface {
 
     this.scene?.add(group);
     this.modelGroups.set(project.id, group);
+    this.loadedCount++;
+    this.onLoadingProgress({ total: this.projects.length, loaded: this.loadedCount });
   }
 
   private handleMouseMove(e: any) {

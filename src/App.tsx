@@ -1,6 +1,9 @@
-import * as React from 'react';
-import { useState, useMemo, useEffect, useCallback, useRef, Component, ErrorInfo, ReactNode } from 'react';
+import React from 'react';
+import { useState, useMemo, useEffect, useCallback, useRef, Component, ErrorInfo, ReactNode, Profiler } from 'react';
 import { Map, useControl, Layer, MapRef, Marker, Source, NavigationControl, ScaleControl } from 'react-map-gl/maplibre';
+import { useSelector, useDispatch } from 'react-redux';
+import { RootState } from './store';
+import { setSelectedEntity, setTacticalViewMode, setRegistrationModalOpen } from './store/tacticalSlice';
 import { MapboxOverlay, MapboxOverlayProps } from '@deck.gl/mapbox';
 import { LightingEffect, AmbientLight, DirectionalLight } from '@deck.gl/core';
 import { createBuildingsLayer } from './layers/buildings';
@@ -13,10 +16,6 @@ import { PathLayer } from '@deck.gl/layers';
 import { H3HexagonLayer } from '@deck.gl/geo-layers';
 import * as h3 from 'h3-js';
 import axios from 'axios';
-import { saveAs } from 'file-saver';
-import { jsPDF } from 'jspdf';
-import * as XLSX from 'xlsx';
-import { toPng } from 'html-to-image';
 // Firebase removed - using local SQLite via API
 import { 
   Building2, 
@@ -59,6 +58,8 @@ import {
   Play,
   Download,
   Filter,
+  Menu,
+  ChevronLeft,
   ShieldCheck,
   ShieldAlert,
   ChevronUp,
@@ -88,18 +89,26 @@ import {
   Printer,
   Car,
   ChevronRight,
-  ChevronLeft,
   Smartphone,
   ArrowUpRight,
   ArrowDownRight,
   Footprints,
   Clock,
   AlertCircle,
-  Hourglass
+  Hourglass,
+  Layout
 } from 'lucide-react';
 import { motion, AnimatePresence, useMotionValue, useSpring, useTransform } from 'motion/react';
 import { cn } from './lib/utils';
+import { useDebounce } from './hooks/useDebounce';
 import Markdown from 'react-markdown';
+import { lazy, Suspense } from 'react';
+import { RadarOverlay } from './components/RadarOverlay';
+import { GlitchOverlay } from './components/GlitchOverlay';
+import { TacticalDashboard } from './components/TacticalDashboard';
+import { AssetRegistrationModal } from './components/AssetRegistrationModal';
+import { StrategicTicker } from './components/StrategicTicker';
+
 import { 
   LineChart, 
   Line, 
@@ -121,6 +130,8 @@ import {
   PolarRadiusAxis,
   Radar as RechartsRadar
 } from 'recharts';
+
+const AdminIntelligencePanel = lazy(() => import('./components/AdminIntelligencePanel'));
 
 // Types
 interface BuildingInfo {
@@ -203,6 +214,14 @@ interface SecondaryMarketOrder {
   yieldPerCycle: number;
   status: 'OPEN' | 'SOLD' | 'CANCELLED';
   createdAt: string;
+}
+
+interface AppNotification {
+  id: string;
+  type: 'error' | 'success' | 'info' | 'warning';
+  message: string;
+  details?: string;
+  timestamp: number;
 }
 
 // Firebase Error Handling
@@ -588,7 +607,7 @@ const DigitalMapHUD = ({ coords }: { coords: { lat: number, lon: number } }) => 
   useEffect(() => {
     const interval = setInterval(() => {
       setPulse(p => (p + 1) % 100);
-    }, 50);
+    }, 200); // Optimized: 5 FPS instead of 20 - adequate for HUD animations
     return () => clearInterval(interval);
   }, []);
 
@@ -812,7 +831,14 @@ const ParallaxCard = ({ children, className }: { children: React.ReactNode, clas
   );
 };
 
-const TacticalTicker = () => {
+const Skeleton = ({ className }: { className?: string }) => (
+  <div className={cn("animate-pulse bg-white/[0.03] rounded relative overflow-hidden border border-white/5", className)}>
+    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/[0.05] to-transparent shimmer-anim" />
+    <div className="scanning-line" />
+  </div>
+);
+
+const TacticalTicker = ({ isLoading }: { isLoading?: boolean }) => {
   const [messages] = useState([
     "ANOMALY DETECTED: OBJ #4432 YIELD DROP -2.1% SIGMA 3",
     "LEASE EXPIRING: OBJ #8821 IN 45 DAYS",
@@ -822,12 +848,26 @@ const TacticalTicker = () => {
   ]);
 
   return (
-    <div className="h-6 bg-black border-t border-primary/20 flex items-center overflow-hidden whitespace-nowrap">
-      <motion.div
-        animate={{ x: [0, -1000] }}
-        transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
-        className="flex gap-12"
-      >
+    <div className="h-6 bg-black border-t border-primary/20 flex items-center px-4 overflow-hidden gap-6">
+        <AnimatePresence>
+          {isLoading && (
+            <motion.div 
+              initial={{ opacity: 0, x: -20 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -20 }}
+              className="flex items-center gap-2 px-3 py-1 bg-primary/10 border border-primary/20 rounded-full"
+            >
+              <div className="w-1.5 h-1.5 bg-primary rounded-full animate-ping" />
+              <span className="text-[8px] font-mono font-bold text-primary uppercase tracking-[0.2em] whitespace-nowrap">Neural_Data_Sync_Active</span>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      <div className="flex-1 overflow-hidden relative">
+        <motion.div
+          animate={{ x: [0, -1000] }}
+          transition={{ duration: 40, repeat: Infinity, ease: "linear" }}
+          className="flex gap-12 whitespace-nowrap"
+        >
         {[...messages, ...messages].map((msg, i) => (
           <div key={i} className="flex items-center gap-2">
             <div className="w-1 h-1 bg-primary rounded-full animate-pulse" />
@@ -835,6 +875,49 @@ const TacticalTicker = () => {
           </div>
         ))}
       </motion.div>
+    </div>
+    </div>
+  );
+};
+
+const ButtonGroup = ({ 
+  children, 
+  className, 
+  variant = 'horizontal', 
+  spacing = 2,
+  justify = 'start',
+  align = 'center'
+}: { 
+  children: React.ReactNode, 
+  className?: string, 
+  variant?: 'horizontal' | 'vertical' | 'wrap',
+  spacing?: number | string,
+  justify?: 'start' | 'center' | 'end' | 'between' | 'around',
+  align?: 'start' | 'center' | 'end' | 'stretch'
+}) => {
+  const gapClass = typeof spacing === 'number' ? `gap-${spacing}` : spacing;
+  const justifyClass = justify === 'start' ? 'justify-start' : 
+                       justify === 'center' ? 'justify-center' : 
+                       justify === 'end' ? 'justify-end' : 
+                       justify === 'between' ? 'justify-between' : 
+                       justify === 'around' ? 'justify-around' : '';
+  const alignClass = align === 'start' ? 'items-start' : 
+                     align === 'center' ? 'items-center' : 
+                     align === 'end' ? 'items-end' : 
+                     align === 'stretch' ? 'items-stretch' : '';
+  
+  return (
+    <div className={cn(
+      "flex",
+      variant === 'horizontal' && "flex-row",
+      variant === 'vertical' && "flex-col",
+      variant === 'wrap' && "flex-row flex-wrap",
+      gapClass,
+      justifyClass,
+      alignClass,
+      className
+    )}>
+      {children}
     </div>
   );
 };
@@ -1025,25 +1108,26 @@ const StrategicOverview = ({ portfolio, balance, portfolioValue, performanceHist
   );
 };
 
-const AssetMatrix = ({ portfolio, onSelect, onSelectAsset, onList }: any) => {
+const AssetMatrix = ({ portfolio, onSelect, onSelectAsset, onList, isLoading }: any) => {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
 
   return (
     <div className="bg-white/5 border border-white/10 rounded-lg overflow-hidden flex flex-col h-full">
-      <div className="p-4 border-b border-white/10 flex justify-between items-center">
+      <div className="p-4 border-b border-white/10 flex justify-between items-center bg-slate-900/50">
         <h3 className="text-[10px] font-mono text-white uppercase tracking-widest flex items-center gap-2">
-          <Database className="w-3 h-3 text-primary" />
+          <Database className="w-3 h-3 text-primary animate-pulse" />
           Asset Matrix // Terminal_01
+          {isLoading && <span className="ml-2 text-[8px] text-primary animate-pulse tracking-tighter">SYNCHRONIZING...</span>}
         </h3>
-        <div className="flex gap-2">
+        <ButtonGroup spacing={2}>
           <button className="px-2 py-1 bg-white/5 border border-white/10 rounded text-[7px] text-slate-400 uppercase hover:bg-white/10 transition-colors">Yield {">"} 15%</button>
           <button className="px-2 py-1 bg-white/5 border border-white/10 rounded text-[7px] text-slate-400 uppercase hover:bg-white/10 transition-colors">Anomalous</button>
-        </div>
+        </ButtonGroup>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-hide">
         <table className="w-full text-left border-collapse">
-          <thead className="sticky top-0 bg-[#0a0a0a] z-10">
-            <tr className="border-b border-white/10">
+          <thead className="sticky top-0 bg-[#0a0a0a] z-10 border-b border-white/10">
+            <tr>
               <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">ID</th>
               <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Address</th>
               <th className="p-4 text-[8px] font-mono text-slate-500 uppercase tracking-widest">Value (₽)</th>
@@ -1054,7 +1138,19 @@ const AssetMatrix = ({ portfolio, onSelect, onSelectAsset, onList }: any) => {
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
-            {portfolio.map((p: any, i: number) => (
+            {isLoading ? (
+              Array.from({ length: 8 }).map((_, i) => (
+                <tr key={`skeleton-${i}`}>
+                   <td className="p-4"><Skeleton className="h-2 w-16 bg-white/10" /></td>
+                   <td className="p-4"><Skeleton className="h-2 w-32 bg-white/10" /></td>
+                   <td className="p-4"><Skeleton className="h-2 w-20 bg-white/10" /></td>
+                   <td className="p-4"><Skeleton className="h-2 w-12 bg-white/10" /></td>
+                   <td className="p-4"><Skeleton className="h-2 w-16 bg-white/10" /></td>
+                   <td className="p-4"><Skeleton className="h-2 w-20 bg-white/10" /></td>
+                   <td className="p-4"><Skeleton className="h-2 w-full bg-white/10" /></td>
+                </tr>
+              ))
+            ) : portfolio.map((p: any, i: number) => (
               <tr 
                 key={i} 
                 className="group hover:bg-primary/5 transition-colors cursor-pointer"
@@ -1115,7 +1211,7 @@ const AssetMatrix = ({ portfolio, onSelect, onSelectAsset, onList }: any) => {
                   </span>
                 </td>
                 <td className="p-4">
-                  <div className="flex gap-2">
+                  <ButtonGroup spacing={2}>
                     <button 
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1134,7 +1230,7 @@ const AssetMatrix = ({ portfolio, onSelect, onSelectAsset, onList }: any) => {
                     >
                       Exit_Node
                     </button>
-                  </div>
+                  </ButtonGroup>
                 </td>
               </tr>
             ))}
@@ -1186,7 +1282,7 @@ const DeepDiveTerminal = ({ asset, portfolioDetailed = [], onClose }: any) => {
             <span className="text-[10px] text-primary font-bold tracking-widest uppercase">Deep Dive Terminal</span>
             <span className="text-[8px] text-slate-500">OBJ_{asset.id} // {asset.address}</span>
           </div>
-          <div className="flex gap-4 ml-8">
+          <ButtonGroup spacing={4} className="ml-8">
             {[1, 2, 3, 4].map(i => (
               <button 
                 key={i}
@@ -1198,7 +1294,7 @@ const DeepDiveTerminal = ({ asset, portfolioDetailed = [], onClose }: any) => {
                 [{i}] {i === 1 ? 'FINANCIALS' : i === 2 ? 'GEOSPATIAL' : i === 3 ? 'TENANT MIX' : 'LEGAL'}
               </button>
             ))}
-          </div>
+          </ButtonGroup>
         </div>
         <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full transition-colors">
           <X className="w-5 h-5 text-slate-500" />
@@ -1543,9 +1639,9 @@ const SyndicateWarRoom = () => (
         </h3>
         <p className="text-[8px] text-slate-500 uppercase mt-1 tracking-widest font-bold">Multi-Institutional Capital Pooling & Governance Steering</p>
       </div>
-      <div className="flex gap-2">
+      <ButtonGroup spacing={2}>
         <button className="px-3 py-1 bg-primary text-black text-[9px] font-bold uppercase tracking-widest rounded hover:bg-primary/80 transition-all">Initialize Pool</button>
-      </div>
+      </ButtonGroup>
     </div>
     <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <div className="lg:col-span-2 space-y-6">
@@ -1687,7 +1783,9 @@ const InvestorCabinet = ({
   onBuyFromMarket,
   user,
   t,
-  onSelectAsset
+  onSelectAsset,
+  isLoadingBuildings,
+  isLoadingAssets
 }: { 
   isOpen: boolean, 
   onClose: () => void, 
@@ -1701,7 +1799,9 @@ const InvestorCabinet = ({
   onBuyFromMarket: (order: SecondaryMarketOrder) => void,
   user: any,
   t: any,
-  onSelectAsset: (asset: any) => void
+  onSelectAsset: (asset: any) => void,
+  isLoadingBuildings?: boolean,
+  isLoadingAssets?: boolean
 }) => {
   const [activeModule, setActiveModule] = useState<'overview' | 'matrix' | 'districts' | 'scenarios' | 'audit' | 'settings' | 'warroom' | 'market'>('overview');
   const [selectedAsset, setSelectedAsset] = useState<any | null>(null);
@@ -1748,11 +1848,11 @@ const InvestorCabinet = ({
       {/* Main Layout */}
       <div className="flex-1 flex overflow-hidden">
         {/* Left Column: Navigation & Tree */}
-        <div className="w-64 border-r border-white/10 flex flex-col bg-[#050505]">
-          <div className="p-6 space-y-8">
-            <div className="space-y-2">
-              <p className="text-[8px] text-slate-600 uppercase tracking-widest font-bold">Main Modules</p>
-              <nav className="space-y-1">
+        <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 flex flex-col bg-[#050505] overflow-x-auto overflow-y-hidden md:overflow-y-auto">
+          <div className="p-4 md:p-6 space-y-6 md:space-y-8 flex flex-row md:flex-col items-center md:items-stretch min-w-max md:min-w-0">
+            <div className="space-y-2 flex-1 w-full">
+              <p className="hidden md:block text-[8px] text-slate-600 uppercase tracking-widest font-bold">Main Modules</p>
+              <ButtonGroup variant="horizontal" spacing={1.5} className="md:flex-col md:gap-1 w-full" align="stretch">
                 {[
                   { id: 'overview', label: 'Strategic Overview', icon: LayoutDashboard },
                   { id: 'matrix', label: 'Asset Matrix', icon: Database },
@@ -1766,15 +1866,15 @@ const InvestorCabinet = ({
                   <button
                     key={item.id}
                     onClick={() => setActiveModule(item.id as any)}
-                    className={cn("w-full flex items-center gap-3 px-3 py-2 rounded text-[9px] font-bold uppercase tracking-wider transition-all",
-                      activeModule === item.id ? "bg-primary text-black" : "text-slate-500 hover:bg-white/5 hover:text-white"
+                    className={cn("flex-1 md:w-full flex items-center justify-center md:justify-start gap-2 md:gap-3 px-3 py-2 md:py-2.5 rounded text-[8px] sm:text-[9px] md:text-[10px] font-bold uppercase tracking-wider transition-all whitespace-normal md:whitespace-nowrap min-h-[40px] md:min-h-0",
+                      activeModule === item.id ? "bg-primary text-black" : "text-slate-500 hover:bg-white/5 hover:text-white border border-transparent hover:border-white/10"
                     )}
                   >
-                    <item.icon className="w-3.5 h-3.5" />
-                    {item.label}
+                    <item.icon className="w-3.5 h-3.5 shrink-0" />
+                    <span className="hidden sm:inline line-clamp-2 md:line-clamp-none">{item.label}</span>
                   </button>
                 ))}
-              </nav>
+              </ButtonGroup>
             </div>
 
             {activeModule === 'districts' && (
@@ -1834,7 +1934,15 @@ const InvestorCabinet = ({
         <div className="flex-1 flex flex-col relative bg-[#0a0a0a]">
           <div className="flex-1 p-8 overflow-y-auto scrollbar-hide">
             {activeModule === 'overview' && <StrategicOverview portfolio={portfolio} balance={balance} portfolioValue={portfolioValue} performanceHistory={performanceHistory} />}
-            {activeModule === 'matrix' && <AssetMatrix portfolio={portfolio} onSelect={setSelectedAsset} onSelectAsset={onSelectAsset} onList={onListOnMarket} />}
+            {activeModule === 'matrix' && (
+              <AssetMatrix 
+                portfolio={portfolio} 
+                onSelect={setSelectedAsset} 
+                onSelectAsset={onSelectAsset} 
+                onList={onListOnMarket} 
+                isLoading={isLoadingAssets}
+              />
+            )}
             {activeModule === 'warroom' && <SyndicateWarRoom />}
             {activeModule === 'market' && <SecondaryMarket marketOrders={marketOrders} onBuy={onBuyFromMarket} portfolio={portfolio} user={user} />}
             {activeModule === 'districts' && (
@@ -2099,7 +2207,9 @@ const InvestorCabinet = ({
                       </div>
                       <button className="text-[8px] text-red-400 uppercase font-bold">Revoke</button>
                     </div>
-                    <button className="w-full py-2 border border-dashed border-primary/30 rounded text-[8px] text-primary uppercase font-bold hover:bg-primary/5 transition-all">+ Generate New Uplink Key</button>
+                    <ButtonGroup variant="vertical" spacing={2}>
+                      <button className="w-full py-2 border border-dashed border-primary/30 rounded text-[8px] text-primary uppercase font-bold hover:bg-primary/5 transition-all">+ Generate New Uplink Key</button>
+                    </ButtonGroup>
                   </div>
                 </div>
                 <div className="bg-white/5 border border-white/10 p-6 rounded-lg">
@@ -2163,7 +2273,7 @@ const InvestorCabinet = ({
       </div>
 
       {/* Bottom Ticker */}
-      <TacticalTicker />
+      <TacticalTicker isLoading={isLoadingBuildings || isLoadingAssets} />
     </motion.div>
   );
 };
@@ -2662,7 +2772,7 @@ const StrategicReportModal = ({ isOpen, onClose, data, t }: any) => {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <ButtonGroup spacing={4}>
           <button 
             onClick={handlePrint}
             className="flex items-center gap-2 px-4 py-2 bg-white/5 hover:bg-white/10 rounded-xl transition-all border border-white/10 text-xs font-bold uppercase tracking-widest"
@@ -2676,30 +2786,30 @@ const StrategicReportModal = ({ isOpen, onClose, data, t }: any) => {
           >
             <X className="w-5 h-5" />
           </button>
-        </div>
+        </ButtonGroup>
       </div>
 
       {/* Main Content */}
       <div className="flex-1 flex flex-col md:flex-row min-h-0 overflow-hidden">
         {/* Sidebar Navigation - Responsive Header on mobile */}
         <div className="w-full md:w-64 border-b md:border-b-0 md:border-r border-white/10 p-2 sm:p-4 md:p-6 space-y-4 md:space-y-8 flex-shrink-0 print:hidden overflow-x-auto overflow-y-hidden md:overflow-y-auto bg-slate-900/50">
-           <div className="flex md:flex-col gap-1.5 sm:gap-2 md:space-y-1 min-w-max md:min-w-0">
+           <ButtonGroup variant="horizontal" spacing={1.5} className="sm:gap-2 md:flex-col md:space-y-1 min-w-max md:min-w-0 w-full" align="stretch">
               {pages.map(page => (
                 <button
                   key={page.id}
                   onClick={() => setActivePage(page.id)}
                   className={cn(
-                    "flex-shrink-0 md:w-full flex items-center gap-2 sm:gap-3 px-3 md:px-4 py-2 md:py-3.5 rounded-xl text-[8px] sm:text-[9px] md:text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap lg:whitespace-normal text-left",
+                    "flex-1 md:w-full flex items-center gap-2 sm:gap-3 px-3 md:px-4 py-2 md:py-3.5 rounded-xl text-[8px] sm:text-[9px] md:text-[10px] font-bold uppercase tracking-widest transition-all whitespace-normal text-left min-h-[44px] md:min-h-0",
                     activePage === page.id 
                       ? "bg-primary text-black shadow-lg shadow-primary/20" 
                       : "text-slate-500 hover:bg-white/5 hover:text-white border border-transparent hover:border-white/10"
                   )}
                 >
-                  <page.icon className="w-3 h-3 sm:w-3.5 h-3.5 md:w-4 h-4" />
-                  <span className="truncate md:overflow-visible">{page.label}</span>
+                  <page.icon className="w-3 h-3 sm:w-3.5 h-3.5 md:w-4 h-4 shrink-0" />
+                  <span className="md:overflow-visible line-clamp-2 md:line-clamp-none">{page.label}</span>
                 </button>
               ))}
-           </div>
+           </ButtonGroup>
 
            <div className="hidden md:block pt-8 border-t border-white/5">
              <div className="p-4 rounded-2xl bg-primary/5 border border-primary/10">
@@ -2746,20 +2856,31 @@ const StrategicReportModal = ({ isOpen, onClose, data, t }: any) => {
   );
 };
 
+// --- Main App Component ---
+
 export default function App() {
-  const [simulationYear, setSimulationYear] = useState(2026);
-  const [showRiskRadar, setShowRiskRadar] = useState(false);
-  const [showInfraPower, setShowInfraPower] = useState(false);
-  const [showInfraComm, setShowInfraComm] = useState(false);
-  const [showFutureProjects, setShowFutureProjects] = useState(false);
+  // Refs
   const mapRef = React.useRef<MapRef>(null);
   const videoRef = React.useRef<HTMLVideoElement>(null);
   const fileInputRef = React.useRef<HTMLInputElement>(null);
   const mediaRecorderRef = React.useRef<MediaRecorder | null>(null);
   const recordedChunksRef = React.useRef<Blob[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
+
+  // Redux
+  const dispatch = useDispatch();
+  const reduxSelectedEntityId = useSelector((state: RootState) => state.tactical.selectedEntityId);
+  const tacticalViewMode = useSelector((state: RootState) => state.tactical.tacticalViewMode);
+  const isRegistrationModalOpen = useSelector((state: RootState) => state.tactical.isRegistrationModalOpen);
+
+  // 1. Basic UI & App State
+  const [simulationYear, setSimulationYear] = React.useState(2026);
+  const [showLogo, setShowLogo] = React.useState(true);
+  const [language, setLanguage] = React.useState<'en' | 'ru'>('en');
+  const [colorScheme, setColorScheme] = React.useState('tactical');
+  const [mode, setMode] = React.useState<'light' | 'dark'>('dark');
+  const [uiStyle, setUiStyle] = React.useState<'tactical' | 'professional'>('tactical');
   
-  // State
+  // 2. Map & Layer States
   const [viewState, setViewState] = useState({
     longitude: 37.6173,
     latitude: 55.7558,
@@ -2767,67 +2888,101 @@ export default function App() {
     pitch: 60,
     bearing: -20
   });
-  
-  const [hoverInfo, setHoverInfo] = useState<BuildingInfo | null>(null);
-  const [selectedBuilding, setSelectedBuilding] = useState<BuildingInfo | null>(null);
+  const [basemap, setBasemap] = useState<any>('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
+
+  // Sync Basemap with Redux Tactical Mode
+  useEffect(() => {
+    switch (tacticalViewMode) {
+      case 'orbital':
+        setBasemap('https://basemaps.cartocdn.com/gl/dark-matter-nolabels-gl-style/style.json');
+        break;
+      case 'tactical':
+        setBasemap('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
+        break;
+      case 'street':
+        setBasemap('https://basemaps.cartocdn.com/gl/positron-gl-style/style.json');
+        break;
+      case 'thermal':
+        setBasemap({
+          version: 8,
+          sources: {
+            'thermal': {
+              type: 'raster',
+              tiles: ['https://stamen-tiles.a.ssl.fastly.net/toner/{z}/{x}/{y}.png'],
+              tileSize: 256
+            }
+          },
+          layers: [{
+            id: 'thermal-layer',
+            type: 'raster',
+            source: 'thermal',
+            paint: { 'raster-hue-rotate': 180, 'raster-brightness-max': 0.8, 'raster-contrast': 0.5 }
+          }]
+        } as any);
+        break;
+      default:
+        setBasemap('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
+    }
+  }, [tacticalViewMode]);
+  const [showBuildings, setShowBuildings] = useState(true);
+  const [showTraffic, setShowTraffic] = useState(true);
+  const [showHexGrid, setShowHexGrid] = useState(false);
+  const [showGrid, setShowGrid] = useState(true);
+  const [showRiskRadar, setShowRiskRadar] = useState(false);
+  const [showInfraPower, setShowInfraPower] = useState(false);
+  const [showInfraComm, setShowInfraComm] = useState(false);
+  const [showFutureProjects, setShowFutureProjects] = useState(false);
+  const [heatMapMode, setHeatMapMode] = useState<'none' | 'pedestrian' | 'price' | 'risk'>('none');
+
+  // 3. Auth & User States
   const [user, setUser] = useState<any>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
   const [userRole, setUserRole] = useState<'anonymous' | 'investor' | 'admin'>('anonymous');
   const [balance, setBalance] = useState(5000000);
   const [portfolio, setPortfolio] = useState<(number | string)[]>([]);
+
+  // 4. Financial & Asset Market States
+  const [portfolioValue, setPortfolioValue] = useState(0);
+  const [totalYield, setTotalYield] = useState(0);
+  const [performanceHistory, setPerformanceHistory] = useState<{time: string, value: number}[]>([]);
+  const [userAssets, setUserAssets] = useState<Asset[]>([]);
+  const [buildingsData, setBuildingsData] = useState<any>(null);
+  const [simulationParams, setSimulationParams] = useState({ rentRate: 0, occupancy: 0, inflation: 0 });
+  const [simulatedBuildings, setSimulatedBuildings] = useState<any>(null);
+  const simWorkerRef = useRef<Worker | null>(null);
+
+  // Initialize Worker
+  useEffect(() => {
+    simWorkerRef.current = new Worker(new URL('./workers/simulation.worker.ts', import.meta.url), { type: 'module' });
+    simWorkerRef.current.onmessage = (e) => {
+      setSimulatedBuildings(e.data);
+    };
+    return () => simWorkerRef.current?.terminate();
+  }, []);
+
+  // Trigger Simulation via Worker
+  useEffect(() => {
+    if (buildingsData && simWorkerRef.current) {
+      simWorkerRef.current.postMessage({
+        buildings: buildingsData,
+        params: simulationParams,
+        year: simulationYear
+      });
+    }
+  }, [buildingsData, simulationParams, simulationYear]);
+
+  // 5. Panel & Modal States
   const [chatOpen, setChatOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [isTyping, setIsTyping] = useState(false);
-  const [basemap, setBasemap] = useState<any>('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
-  const [showBuildings, setShowBuildings] = useState(true);
-  const [layersMenuOpen, setLayersMenuOpen] = useState(false);
-  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [layersMenuOpen, setLayersMenuOpen] = useState(false);
+  const [roleMenuOpen, setRoleMenuOpen] = useState(false);
   const [legendOpen, setLegendOpen] = useState(false);
-
-  // New States
-  const [language, setLanguage] = useState<'en' | 'ru'>('en');
-  const [colorScheme, setColorScheme] = useState('tactical');
-  const [mode, setMode] = useState<'light' | 'dark'>('dark');
-  const [uiStyle, setUiStyle] = useState<'tactical' | 'professional'>('tactical');
-  const [showLogo, setShowLogo] = useState(true);
-  
-  // Sync theme and mode to document
-  useEffect(() => {
-    document.documentElement.setAttribute('data-mode', mode);
-    document.documentElement.setAttribute('data-theme', colorScheme);
-    
-    // Update basemap based on mode ONLY if it is currently a standard basemap
-    setBasemap(prev => {
-      // If prev is an object, it is a custom 3D mode, don't reset it
-      if (typeof prev === 'object') return prev;
-      
-      return mode === 'light' 
-        ? 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
-        : 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
-    });
-  }, [mode, colorScheme]);
-
-  // Hide logo splash after delay
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowLogo(false);
-    }, 2500);
-    return () => clearTimeout(timer);
-  }, []);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [isSearching, setIsSearching] = useState(false);
-  const [searchResults, setSearchResults] = useState<any[]>([]);
-  const [searchMarker, setSearchMarker] = useState<{ lat: number, lon: number, name: string } | null>(null);
-  const [pulse, setPulse] = useState(0);
-  const [showTraffic, setShowTraffic] = useState(true);
-  const [showHexGrid, setShowHexGrid] = useState(false);
-  // trafficTime removed from state to prevent 60fps App re-renders
-  const [syndicates, setSyndicates] = useState<Syndicate[]>([]);
-  const [activeSyndicateId, setActiveSyndicateId] = useState<string | null>(null);
-  const [syndicateRoomOpen, setSyndicateRoomOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [dashboardOpen, setDashboardOpen] = useState(true);
+  const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
+  // initialize market orders
   const [marketOrders, setMarketOrders] = useState<SecondaryMarketOrder[]>([
     {
       id: 'EXCH-T7X2K9L',
@@ -2852,14 +3007,282 @@ export default function App() {
       createdAt: new Date().toISOString()
     }
   ]);
-  const [marketOpen, setMarketOpen] = useState(false);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [syndicateRoomOpen, setSyndicateRoomOpen] = useState(false);
+
+  // 6. Interaction & Analysis States
+  const [hoverInfo, setHoverInfo] = useState<BuildingInfo | null>(null);
+  const [selectedBuilding, setSelectedBuilding] = useState<BuildingInfo | null>(null);
+
+  // Sync Redux with Local State (for migration/compatibility)
+  useEffect(() => {
+    if (selectedBuilding?.id) {
+      dispatch(setSelectedEntity(selectedBuilding.id));
+    } else {
+      dispatch(setSelectedEntity(null));
+    }
+  }, [selectedBuilding, dispatch]);
+  const [buildingDetails, setBuildingDetails] = useState<any>(null);
+  const [isFetchingDetails, setIsFetchingDetails] = useState(false);
+  const [selectedHex, setSelectedHex] = useState<any | null>(null);
+  const [hexAnalysis, setHexAnalysis] = useState<string | null>(null);
+  const [isHexAnalyzing, setIsHexAnalyzing] = useState(false);
+  const [analyzedHexes, setAnalyzedHexes] = useState<any[]>([]);
+  const [newAsset, setNewAsset] = useState({
+    title: '',
+    address: '',
+    cost: 0,
+    sqft: 0,
+    yearBuilt: 2024,
+    parkingSpaces: 0,
+    type: 'Commercial',
+    roi: 0,
+    yield: 0,
+    description: '',
+    latitude: 0,
+    longitude: 0,
+    model: 'standard'
+  });
+  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [dataOnlyMode, setDataOnlyMode] = useState(false);
+  const [isAccessGranted, setIsAccessGranted] = useState(false);
+  const [terminalInput, setTerminalInput] = useState('');
+  const [terminalStatus, setTerminalStatus] = useState<'idle' | 'handshake' | 'granted'>('idle');
+  const [filters, setFilters] = useState({
+    statuses: ['stable', 'risk', 'anomalous'],
+    minRoi: 0,
+    owner: ''
+  });
   
+  // 7. Messaging & AI Service
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [input, setInput] = useState('');
+  const [isTyping, setIsTyping] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' }), []);
+
+  // 8. Other Utility States
+  const [isRecording, setIsRecording] = useState(false);
+  const [isSearching, setIsSearching] = useState(false);
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchMarker, setSearchMarker] = useState<{ lat: number, lon: number, name: string } | null>(null);
+  const [roadsData, setRoadsData] = useState<any[]>([]);
+  const [isTrafficLoading, setIsTrafficLoading] = useState(false);
+  const [isLoadingBuildings, setIsLoadingBuildings] = useState(false);
+  const [isLoadingAssets, setIsLoadingAssets] = useState(false);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  const [syndicates, setSyndicates] = useState<Syndicate[]>([]);
+  const [activeSyndicateId, setActiveSyndicateId] = useState<string | null>(null);
+  const [isMuted, setIsMuted] = useState(false);
+  const [isGeocoding, setIsGeocoding] = useState(false);
+  const [gridBrightness, setGridBrightness] = useState(0.1);
+  const [scanlineIntensity, setScanlineIntensity] = useState(0.3);
+  const [buildingScanlineIntensity, setBuildingScanlineIntensity] = useState(0.2);
+
+  const debouncedGridBrightness = useDebounce(gridBrightness, 150);
+  const debouncedScanlineIntensity = useDebounce(scanlineIntensity, 150);
+  const debouncedBuildingScanlineIntensity = useDebounce(buildingScanlineIntensity, 150);
+
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportData, setReportData] = useState<any>(null);
+  const [buildingMedia, setBuildingMedia] = useState<Record<number, MediaItem[]>>({});
+  const [isCapturing, setIsCapturing] = useState<'photo' | 'video' | null>(null);
+  const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
+  const [lastInteraction, setLastInteraction] = useState(Date.now());
+  const [isAutoRotating, setIsAutoRotating] = useState(false);
+  const [hoveredProject, setHoveredProject] = useState<ProjectModel | null>(null);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
+
+  const addNotification = useCallback((type: AppNotification['type'], message: string, details?: string) => {
+    const id = Math.random().toString(36).substr(2, 9);
+    setNotifications(prev => [...prev, { id, type, message, details, timestamp: Date.now() }]);
+    // Auto-remove after 6 seconds for non-errors, errors stay 10 seconds
+    const timeout = type === 'error' ? 10000 : 6000;
+    setTimeout(() => {
+      setNotifications(prev => prev.filter(n => n.id !== id));
+    }, timeout);
+  }, []);
+
+  const clearNotification = (id: string) => {
+    setNotifications(prev => prev.filter(n => n.id !== id));
+  };
+  const [isSuggesting, setIsSuggesting] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [tacticalMenuOpen, setTacticalMenuOpen] = useState(false);
+  const [suggestion, setSuggestion] = useState<{ type: string, model: string, reason: string } | null>(null);
+  const [modelLoadingStatus, setModelLoadingStatus] = useState({ total: 0, loaded: 0 });
+  const [displayMode, setDisplayMode] = useState<'normal' | 'nvg' | 'thermal' | 'radar' | 'glitch'>('normal');
+  const [glitchIntensity, setGlitchIntensity] = useState(0.3);
+  const [radarRotation, setRadarRotation] = useState(0);
+
+  // Tactical Visualization Handlers
+  useEffect(() => {
+    document.documentElement.setAttribute('data-display-mode', displayMode);
+    if (displayMode !== 'normal') soundService.playClick();
+  }, [displayMode]);
+
+  useEffect(() => {
+    if (displayMode !== 'radar') return;
+    const interval = setInterval(() => {
+      setRadarRotation(r => (r + 0.04) % (Math.PI * 2));
+    }, 50);
+    return () => clearInterval(interval);
+  }, [displayMode]);
+
+  useEffect(() => {
+    if (displayMode !== 'glitch') return;
+    const triggerGlitch = () => {
+      if (Math.random() < glitchIntensity * 0.4) {
+        soundService.playGlitch();
+      }
+    };
+    const interval = setInterval(triggerGlitch, 400);
+    return () => clearInterval(interval);
+  }, [displayMode, glitchIntensity]);
+
+  // 9. Hardware Awareness & Adaptive Performance
+  useEffect(() => {
+    const cores = navigator.hardwareConcurrency || 4;
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+    
+    // Performance Mark: Boot
+    performance.mark('yardsoft-boot-start');
+
+    let maxUnits = 16;
+    if (gl) {
+      maxUnits = (gl as WebGLRenderingContext).getParameter((gl as WebGLRenderingContext).MAX_VERTEX_TEXTURE_IMAGE_UNITS) || 16;
+      
+      // WebGL Context Lost Handling
+      canvas.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        console.error("[CRITICAL] WebGL Context Lost. Re-initializing engine...");
+        // Re-triggers will happen via state updates or page reload if needed
+      }, false);
+    }
+
+    const isWeakGPU = maxUnits < 16;
+    const isWeakCPU = cores < 4;
+
+    if (isWeakCPU || isWeakGPU) {
+      console.warn("[YARDSOFT] Conservative hardware detected. Throttling visual effects.");
+      setBuildingScanlineIntensity(0.05);
+      setScanlineIntensity(0.1);
+      setGridBrightness(0.02);
+    } else {
+      console.info(`[YARDSOFT] Hardware verified: CPU_CORES=${cores}, GPU_TEXTURE_UNITS=${maxUnits}`);
+    }
+
+    // Visibility API for power saving
+    const handleVisibility = () => {
+      if (document.hidden) {
+        console.log("[SYSTEM] Tab hidden. Entering power save mode.");
+        setIsAutoRotating(false);
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+
+    // Memory Heap Monitoring (Chrome/Edge Only)
+    const checkMemory = setInterval(() => {
+       if ((performance as any).memory) {
+         const heapUsed = (performance as any).memory.usedJSHeapSize;
+         const limit = 1.5 * 1024 * 1024 * 1024; // 1.5GB
+         if (heapUsed > limit) {
+           console.warn(`[MEMORY_ALERT] Heap exceeds 1.5GB (${Math.round(heapUsed/1024/1024)}mb). Dropping visual quality.`);
+           setBuildingScanlineIntensity(0);
+           setDataOnlyMode(true);
+         }
+       }
+    }, 10000);
+
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibility);
+      clearInterval(checkMemory);
+    };
+  }, []);
+
+  const onRenderCallback = (
+    id: string,
+    phase: "mount" | "update" | "nested-update",
+    actualDuration: number
+  ) => {
+    const isDebug = new URLSearchParams(window.location.search).get('debug') === 'perf';
+    if (isDebug) {
+      performance.mark(`${id}-${phase}`);
+      if (actualDuration > 16) {
+        console.warn(`[PERF] ${id} slow render: ${actualDuration.toFixed(2)}ms`);
+      }
+    }
+  };
+
+  // Memos depend on states
   const activeSyndicate = useMemo(() => 
     activeSyndicateId ? syndicates.find(s => s.id === activeSyndicateId) : null,
   [syndicates, activeSyndicateId]);
-  const [roadsData, setRoadsData] = useState<any[]>([]);
-  const [isTrafficLoading, setIsTrafficLoading] = useState(false);
 
+  const portfolioDetailed = useMemo(() => {
+    if (!buildingsData || !portfolio) return [];
+    return portfolio.map(id => {
+      const building = buildingsData.features.find((f: any) => f.properties.id === id);
+      if (building) {
+        return { 
+          ...building.properties, 
+          id: building.properties.id,
+          latitude: building.geometry.coordinates[1], 
+          longitude: building.geometry.coordinates[0],
+          address: building.properties.address || 'Strategic Location',
+          yield: building.properties.yield || (building.properties.cost * 0.01),
+          roi: building.properties.roi || 12.5,
+          status: building.properties.status || 1
+        };
+      }
+      return null;
+    }).filter(Boolean);
+  }, [buildingsData, portfolio]);
+
+  const t = translations[language];
+
+  // Callback Memos (Handlers)
+  const handleToggleLayersMenu = useCallback(() => setLayersMenuOpen(prev => !prev), []);
+  const handleToggleLegend = useCallback(() => setLegendOpen(prev => !prev), []);
+  const handleToggleProfile = useCallback(() => setProfileOpen(prev => !prev), []);
+  const handleToggleSettings = useCallback(() => setSettingsOpen(prev => !prev), []);
+  const handleToggleChat = useCallback(() => setChatOpen(prev => !prev), []);
+  const handleToggleMarket = useCallback(() => setMarketOpen(prev => !prev), []);
+  const handleToggleInvestorCabinet = useCallback(() => setInvestorCabinetOpen(prev => !prev), []);
+  const handleResetFilters = useCallback(() => setFilters({ statuses: ['stable', 'risk', 'anomalous'], minRoi: 0, owner: '' }), []);
+
+  const handleBasemapSelect = useCallback((m: any) => {
+    setBasemap(m.url);
+    soundService.playClick();
+  }, []);
+  
+  // Sync theme and mode to document
+  useEffect(() => {
+    document.documentElement.setAttribute('data-mode', mode);
+    document.documentElement.setAttribute('data-theme', colorScheme);
+    
+    // Update basemap based on mode ONLY if it is currently a standard basemap
+    setBasemap(prev => {
+      // If prev is an object, it is a custom 3D mode, don't reset it
+      if (typeof prev === 'object') return prev;
+      
+      return mode === 'light' 
+        ? 'https://basemaps.cartocdn.com/gl/positron-gl-style/style.json'
+        : 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+    });
+  }, [mode, colorScheme]);
+
+  // Hide logo splash after delay
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setShowLogo(false);
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, []);
   // Local Auth Simulation
   useEffect(() => {
     const savedUser = localStorage.getItem('tactical_user');
@@ -3018,10 +3441,10 @@ export default function App() {
         } else {
           // Initialize new user profile in local SQL
           const newProfile = {
-            uid: user.uid,
-            email: user.email,
-            displayName: user.displayName,
-            photoURL: user.photoURL,
+            uid: user?.uid,
+            email: user?.email,
+            displayName: user?.displayName,
+            photoURL: user?.photoURL || null,
             role: 'investor',
             balance: 5000000,
             portfolio: [],
@@ -3048,7 +3471,8 @@ export default function App() {
   }, [user, isAuthReady]);
 
   const handleLogin = async () => {
-    // Mock login for demonstration - in real app would use OAuth or local creds
+    setIsLoggingIn(true);
+    // Mock login for demonstration
     const mockUser = {
       uid: 'user_' + Math.random().toString(36).substr(2, 9),
       email: 'lookastarik@gmail.com',
@@ -3062,14 +3486,21 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(mockUser)
       });
+      if (!res.ok) throw new Error("Authentication node failed to validate tactical credentials.");
       const data = await res.json();
       setUser(data);
       setUserRole(data.role);
       setBalance(data.balance);
       setPortfolio(data.portfolio || []);
       localStorage.setItem('tactical_user', JSON.stringify(data));
+      addNotification('success', 'Authority Granted', `Welcome back, ${data.displayName || 'Officer'}. Neural link established.`);
+      soundService.playSuccess();
     } catch (error) {
       console.error("Login failed:", error);
+      addNotification('error', 'Auth Failure', 'Neural handshake rejected. Verify clearances.');
+      soundService.playDenied();
+    } finally {
+      setIsLoggingIn(false);
     }
   };
 
@@ -3079,8 +3510,6 @@ export default function App() {
     localStorage.removeItem('tactical_user');
     setProfileOpen(false);
   };
-  const [buildingMedia, setBuildingMedia] = useState<Record<number, MediaItem[]>>({});
-
   // Fetch media for selected building
   useEffect(() => {
     if (selectedBuilding) {
@@ -3095,31 +3524,17 @@ export default function App() {
         .catch(err => console.error("Failed to fetch media:", err));
     }
   }, [selectedBuilding]);
-  const [isCapturing, setIsCapturing] = useState<'photo' | 'video' | null>(null);
-  const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
-  const [reportModalOpen, setReportModalOpen] = useState(false);
-  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
-  const [reportData, setReportData] = useState<any>(null);
-
-  // Advanced Filters State
-  const [filtersOpen, setFiltersOpen] = useState(false);
-  const [filters, setFilters] = useState({
-    statuses: ['stable', 'risk', 'anomalous'],
-    minRoi: 0,
-    owner: ''
-  });
-  const [dashboardOpen, setDashboardOpen] = useState(true);
-  const [simulationParams, setSimulationParams] = useState({ rentRate: 0, occupancy: 0, inflation: 0 });
-  const [isMuted, setIsMuted] = useState(false);
-  const [isGeocoding, setIsGeocoding] = useState(false);
-  const [heatMapMode, setHeatMapMode] = useState<'none' | 'pedestrian' | 'price' | 'risk'>('none');
 
   useEffect(() => {
     soundService.setMuted(isMuted);
   }, [isMuted]);
 
   const handleGeocode = async () => {
-    if (!newAsset.address) return;
+    if (!newAsset.address) {
+      addNotification('warning', 'Incomplete Data', 'Please enter a valid address or cadastral number before geocoding.');
+      return;
+    }
+    
     setIsGeocoding(true);
     try {
       const response = await axios.get(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(newAsset.address)}&limit=1`);
@@ -3134,63 +3549,91 @@ export default function App() {
           transitionDuration: 1500
         }));
         soundService.playSonar();
+        addNotification('success', 'Geocoding Successful', `Coordinates locked: ${parseFloat(lat).toFixed(4)}, ${parseFloat(lon).toFixed(4)}`);
+      } else {
+        addNotification('error', 'Location Not Found', 'The address could not be resolved. Please verify the address or cadastre number and try again.');
+        soundService.playDenied();
       }
     } catch (error) {
       console.error('Geocoding failure', error);
+      addNotification('error', 'System Connection Failure', 'The orbital geocoding service is currently unreachable. Check your network uplink.');
       soundService.playDenied();
     } finally {
       setIsGeocoding(false);
     }
   };
 
-  const handleExportPDF = () => {
-    const doc = new jsPDF();
-    doc.setFontSize(22);
-    doc.text("INVESTMENT MEMORANDUM", 105, 20, { align: 'center' });
-    doc.setFontSize(10);
-    doc.text(`Strategic Report Generated: ${new Date().toLocaleString()}`, 105, 30, { align: 'center' });
-    doc.text(`Authority: ${user?.email || 'Institutional_Unit'}`, 20, 45);
-    
-    doc.setFontSize(14);
-    doc.text("Portfolio Summary", 20, 60);
-    doc.setFontSize(10);
-    doc.text(`Market Liquidity: $${balance.toLocaleString()}`, 20, 70);
-    doc.text(`Aggregate Asset Value: $${portfolioValue.toLocaleString()}`, 20, 75);
-    doc.text(`ROI Effect Index: ${(simulationParams.rentRate * 0.5).toFixed(2)}%`, 20, 80);
-
-    doc.setFontSize(14);
-    doc.text("Strategic Assets", 20, 95);
-    portfolioDetailed.slice(0, 10).forEach((asset, i) => {
+  const handleExportPDF = useCallback(async () => {
+    try {
+      const { jsPDF } = await import('jspdf');
+      const doc = new jsPDF();
+      doc.setFontSize(22);
+      doc.text("INVESTMENT MEMORANDUM", 105, 20, { align: 'center' });
       doc.setFontSize(10);
-      doc.text(`${i+1}. ${asset.title} - $${asset.cost.toLocaleString()} (ROI: ${asset.roi}%)`, 20, 105 + (i * 8));
-    });
+      doc.text(`Strategic Report Generated: ${new Date().toLocaleString()}`, 105, 30, { align: 'center' });
+      doc.text(`Authority: ${user?.email || 'Institutional_Unit'}`, 20, 45);
+      
+      doc.setFontSize(14);
+      doc.text("Portfolio Summary", 20, 60);
+      doc.setFontSize(10);
+      doc.text(`Market Liquidity: $${balance.toLocaleString()}`, 20, 70);
+      doc.text(`Aggregate Asset Value: $${portfolioValue.toLocaleString()}`, 20, 75);
+      doc.text(`ROI Effect Index: ${(simulationParams.rentRate * 0.5).toFixed(2)}%`, 20, 80);
 
-    doc.save(`Investment_Memorandum_${Date.now()}.pdf`);
-    soundService.playSuccess();
-  };
+      doc.setFontSize(14);
+      doc.text("Strategic Assets", 20, 95);
+      portfolioDetailed.slice(0, 10).forEach((asset, i) => {
+        doc.setFontSize(10);
+        doc.text(`${i+1}. ${asset.title} - $${asset.cost.toLocaleString()} (ROI: ${asset.roi}%)`, 20, 105 + (i * 8));
+      });
 
-  const handleExportExcel = () => {
-    const ws = XLSX.utils.json_to_sheet(portfolioDetailed);
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Strategic_Assets");
-    XLSX.writeFile(wb, `Yard_Asset_Ledger_${Date.now()}.xlsx`);
-    soundService.playSuccess();
-  };
+      doc.save(`Investment_Memorandum_${Date.now()}.pdf`);
+      soundService.playSuccess();
+      addNotification('success', 'Export Complete', 'The tactical investment memorandum has been generated and downloaded as a PDF.');
+    } catch (err) {
+      console.error("PDF Export failed:", err);
+      addNotification('error', 'Export Anomaly', 'Failed to generate tactical PDF. Critical modules failed to initialize.');
+    }
+  }, [user, balance, portfolioValue, portfolioDetailed, simulationParams.rentRate]);
 
-  const handleExportScreenshot = () => {
+  const handleExportExcel = useCallback(async () => {
+    try {
+      const XLSX = await import('xlsx');
+      const ws = XLSX.utils.json_to_sheet(portfolioDetailed);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Strategic_Assets");
+      XLSX.writeFile(wb, `Yard_Asset_Ledger_${Date.now()}.xlsx`);
+      soundService.playSuccess();
+      addNotification('success', 'Data Sync Complete', 'Strategic assets ledger exported to Excel format.');
+    } catch (err) {
+      console.error("Excel Export failed:", err);
+      addNotification('error', 'Sync Failure', 'Failed to compile strategic ledger. Excel modules disconnected.');
+    }
+  }, [portfolioDetailed]);
+
+  const handleExportScreenshot = useCallback(async () => {
     const mapElement = document.getElementById('strategic-map-container');
     if (mapElement) {
-      toPng(mapElement)
-        .then((dataUrl) => {
-          saveAs(dataUrl, `Tactical_Screen_${Date.now()}.png`);
-          soundService.playSuccess();
-        })
-        .catch((err) => {
-          console.error('Snapshot failure', err);
-          soundService.playDenied();
-        });
+      try {
+        const { toPng } = await import('html-to-image');
+        const { saveAs } = await import('file-saver');
+        toPng(mapElement)
+          .then((dataUrl) => {
+            saveAs(dataUrl, `Tactical_Screen_${Date.now()}.png`);
+            soundService.playSuccess();
+            addNotification('success', 'Snapshot Captured', 'Strategic map view archived to local storage.');
+          })
+          .catch((err) => {
+            console.error('Snapshot failure', err);
+            soundService.playDenied();
+            addNotification('error', 'Optics Failure', 'Failed to capture orbital snapshot. Visual data corrupted.');
+          });
+    } catch (err) {
+      console.error("Screenshot modules load failed:", err);
+      addNotification('error', 'Module Load Error', 'Required optics libraries for map capture could not be loaded.');
     }
-  };
+    }
+  }, []);
 
   // Floating Particles for Sci-fi Atmosphere
   const FloatingParticles = () => (
@@ -3218,9 +3661,6 @@ export default function App() {
       ))}
     </div>
   );
-  const [gridBrightness, setGridBrightness] = useState(0.1);
-  const [scanlineIntensity, setScanlineIntensity] = useState(0.3);
-  const [buildingScanlineIntensity, setBuildingScanlineIntensity] = useState(0.2);
 
   // Traffic Animation Loop - Removed from App to prevent performance crashes
   useEffect(() => {
@@ -3277,9 +3717,6 @@ export default function App() {
     fetchRoads();
   }, []); // Only fetch once on mount for now to avoid heavy API calls
   const [mapCoords, setMapCoords] = useState({ lat: 55.7558, lon: 37.6173 });
-  const [lastInteraction, setLastInteraction] = useState(Date.now());
-  const [isAutoRotating, setIsAutoRotating] = useState(false);
-  const [hoveredProject, setHoveredProject] = useState<ProjectModel | null>(null);
 
   const lightingEffect = useMemo(() => {
     const ambientLight = new AmbientLight({
@@ -3323,7 +3760,7 @@ export default function App() {
     
     const projectLayer = new ThreeProjectLayer(strategicProjects, (project) => {
       setHoveredProject(project);
-    });
+    }, (status) => setModelLoadingStatus(status));
 
     const addLayer = () => {
       if (!map.getLayer(projectLayer.id)) {
@@ -3371,13 +3808,9 @@ export default function App() {
     return () => cancelAnimationFrame(animationFrame);
   }, [isAutoRotating]);
 
-  const [userAssets, setUserAssets] = useState<Asset[]>([]);
-  const [createModalOpen, setCreateModalOpen] = useState(false);
-
-  const [buildingsData, setBuildingsData] = useState<any>(null);
-
   useEffect(() => {
     const fetchBuildings = async () => {
+      setIsLoadingBuildings(true);
       const headers: any = {};
       if (user) {
         headers['x-user-id'] = user.uid;
@@ -3385,11 +3818,15 @@ export default function App() {
       
       try {
         const res = await fetch('/api/v1/buildings', { headers });
+        if (!res.ok) throw new Error(`Status ${res.status}`);
         const data = await res.json();
         setBuildingsData(data);
         soundService.playSonar();
       } catch (err) {
         console.error("Failed to fetch buildings:", err);
+        addNotification('error', 'Map Data Unavailable', 'Failed to synchronize with orbital building database. Some structural data may be missing from your tactical view.');
+      } finally {
+        setIsLoadingBuildings(false);
       }
     };
 
@@ -3403,6 +3840,7 @@ export default function App() {
     if (!isAuthReady) return;
 
     const fetchAssets = async () => {
+      setIsLoadingAssets(true);
       try {
         const res = await fetch('/api/assets');
         if (!res.ok) throw new Error("Failed to fetch assets");
@@ -3410,6 +3848,10 @@ export default function App() {
         setUserAssets(data);
       } catch (error) {
         console.error("Failed to fetch assets:", error);
+        // Only notify once to avoid spamming
+        addNotification('warning', 'Asset Ledger Offline', 'Could not sync your private asset portfolio. Strategic valuations might be outdated.');
+      } finally {
+        setIsLoadingAssets(false);
       }
     };
 
@@ -3418,14 +3860,14 @@ export default function App() {
     return () => clearInterval(interval);
   }, [isAuthReady]);
 
-  const toggleStatusFilter = (status: string) => {
+  const toggleStatusFilter = useCallback((status: string) => {
     setFilters(prev => ({
       ...prev,
       statuses: prev.statuses.includes(status)
         ? prev.statuses.filter(s => s !== status)
         : [...prev.statuses, status]
     }));
-  };
+  }, []);
 
   const filteredBuildings = useMemo(() => {
     if (!buildingsData) return null;
@@ -3470,56 +3912,25 @@ export default function App() {
       };
     });
 
-    const combinedFeatures = [...buildingsData.features, ...userFeatures];
+    const combinedFeatures = [...(buildingsData?.features || []), ...userFeatures];
+    const filteredFeatures = combinedFeatures.filter((f: any) => {
+      const props = f.properties;
+      const status = props.status === 1 ? 'stable' : props.status === 2 ? 'risk' : props.status === 3 ? 'anomalous' : 'other';
+      if (!(filters?.statuses || []).includes(status)) return false;
+      if ((props?.roi || 0) < (filters?.minRoi || 0)) return false;
+      if (filters?.owner && !props?.owner?.toLowerCase().includes(filters.owner.toLowerCase())) return false;
+      return true;
+    });
 
     return {
-      ...buildingsData,
-      features: combinedFeatures.filter((f: any) => {
-        const props = f.properties;
-        const status = props.status === 1 ? 'stable' : props.status === 2 ? 'risk' : props.status === 3 ? 'anomalous' : 'other';
-        if (!filters.statuses.includes(status)) return false;
-        if (props.roi < filters.minRoi) return false;
-        if (filters.owner && !props.owner?.toLowerCase().includes(filters.owner.toLowerCase())) return false;
-        return true;
-      })
+      type: 'FeatureCollection',
+      features: filteredFeatures
     };
   }, [buildingsData, filters, userAssets, user]);
 
-  const t = translations[language];
-
-  // Pulse timer for tactical animations - Removed for high-performance GPU-only animation
-  // If you need pulse in React state, consider slowing it down (e.g. 500ms)
-  useEffect(() => {
-    // No-op: handled in shaders via project_uTime
-  }, []);
-
-  const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
-
-  const portfolioDetailed = useMemo(() => {
-    if (!buildingsData || !portfolio) return [];
-    return portfolio.map(id => {
-      const building = buildingsData.features.find((f: any) => f.properties.id === id);
-      if (building) {
-        return { 
-          ...building.properties, 
-          id: building.properties.id,
-          latitude: building.geometry.coordinates[1], 
-          longitude: building.geometry.coordinates[0],
-          address: building.properties.address || 'Strategic Location',
-          yield: building.properties.yield || (building.properties.cost * 0.01),
-          roi: building.properties.roi || 12.5,
-          status: building.properties.status || 1
-        };
-      }
-      return null;
-    }).filter(Boolean);
-  }, [buildingsData, portfolio]);
-  const [performanceHistory, setPerformanceHistory] = useState<{time: string, value: number}[]>([]);
-
+  // Pulse timer for tactical animations
   // Game State
-  const [totalYield, setTotalYield] = useState(0);
-  const [portfolioValue, setPortfolioValue] = useState(0);
-
+  
   // Track performance history
   useEffect(() => {
     if (performanceHistory.length === 0) {
@@ -3611,6 +4022,7 @@ export default function App() {
     setIsSearching(true);
     try {
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=5`);
+      if (!response.ok) throw new Error("Intelligence database currently unavailable.");
       const data = await response.json();
       
       setSearchResults(data);
@@ -3630,12 +4042,17 @@ export default function App() {
           
           setSearchMarker({ lat: latitude, lon: longitude, name: display_name });
           setSearchResults([]);
+          addNotification('success', 'Location Synchronized', `Orbital focus locked on: ${display_name}`);
         }
       } else if (data && data.length === 0) {
+        addNotification('warning', 'Intelligence Gap', 'No strategic locations matched your coordinates or address query.');
         console.warn("No search results found for:", searchQuery);
+      } else if (data && data.length > 1) {
+        addNotification('info', 'Multiple Targets Detected', `Found ${data.length} potential matches. Please select your target from the search results index.`);
       }
     } catch (error) {
       console.error("Search failed:", error);
+      addNotification('error', 'Intelligence Link Offline', 'Failed to reach the global location index. Please verify your tactical network uplink.');
     } finally {
       setIsSearching(false);
     }
@@ -3663,28 +4080,7 @@ export default function App() {
     setSearchQuery(display_name);
   };
 
-  const [newAsset, setNewAsset] = useState({
-    title: '',
-    type: 'retail',
-    model: 'house',
-    cost: 0,
-    yield: 0,
-    description: '',
-    address: '',
-    latitude: 55.7558,
-    longitude: 37.6173,
-    sqft: 0,
-    yearBuilt: new Date().getFullYear(),
-    parkingSpaces: 0
-  });
   const [isCreating, setIsCreating] = useState(false);
-  const [aiAnalysis, setAiAnalysis] = useState<string | null>(null);
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [dataOnlyMode, setDataOnlyMode] = useState(false);
-  const [showGrid, setShowGrid] = useState(true);
-  const [isAccessGranted, setIsAccessGranted] = useState(false);
-  const [terminalInput, setTerminalInput] = useState('');
-  const [terminalStatus, setTerminalStatus] = useState<'idle' | 'handshake' | 'granted'>('idle');
 
   const handleAIAnalysis = async (building: BuildingInfo) => {
     if (!building) return;
@@ -3709,14 +4105,15 @@ export default function App() {
       Use a "Command & Control" tone, concise and data-driven. Use markdown for high-quality formatting including bold headers and bullet points.`;
       
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt
+        model: "gemini-1.5-flash",
+        contents: [{ parts: [{ text: prompt }] }]
       });
       
       setAiAnalysis(response.text || "No analysis generated.");
     } catch (error) {
       console.error("AI Analysis failed:", error);
-      setAiAnalysis("Failed to perform AI analysis. Strategic link severed. Please re-initialize.");
+      setAiAnalysis("Strategic link severed. The neural processing cluster failed to synthesize an investment memorandum for this asset. Please re-initialize tactical scan.");
+      addNotification('error', 'Intelligence Synthesis Failure', 'Gemini AI node reported a timeout or processing anomaly during asset evaluation.');
     } finally {
       setIsAnalyzing(false);
     }
@@ -3743,20 +4140,8 @@ export default function App() {
       Do not include markdown code blocks, just the raw JSON.`;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              advantages: { type: Type.ARRAY, items: { type: Type.STRING } },
-              risks: { type: Type.ARRAY, items: { type: Type.STRING } },
-              market_context: { type: Type.STRING }
-            },
-            required: ["advantages", "risks", "market_context"]
-          }
-        }
+        model: "gemini-1.5-flash",
+        contents: [{ parts: [{ text: prompt }] }]
       });
 
       let swot;
@@ -3795,18 +4180,8 @@ export default function App() {
       setIsGeneratingReport(false);
     }
   };
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [isSuggesting, setIsSuggesting] = useState(false);
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [tacticalMenuOpen, setTacticalMenuOpen] = useState(false);
-  const [suggestion, setSuggestion] = useState<{ type: string, model: string, reason: string } | null>(null);
-  
-  const [selectedHex, setSelectedHex] = useState<any | null>(null);
-  const [hexAnalysis, setHexAnalysis] = useState<string | null>(null);
-  const [isHexAnalyzing, setIsHexAnalyzing] = useState(false);
-  const [analyzedHexes, setAnalyzedHexes] = useState<any[]>([]);
 
-  const handleAnalyzeHex = async (hexData: any) => {
+  const handleAnalyzeHex = useCallback(async (hexData: any) => {
     if (!hexData) return;
     setIsHexAnalyzing(true);
     setHexAnalysis(null);
@@ -3828,17 +4203,17 @@ export default function App() {
       **Tactical Priority:** [1-10]`;
       
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
-        contents: prompt
+        model: "gemini-1.5-flash",
+        contents: [{ parts: [{ text: prompt }] }]
       });
       
-      const result = response.text || "Unable to decrypt district patterns.";
-      setHexAnalysis(result);
+      const analysisText = response.text || "Unable to decrypt district patterns.";
+      setHexAnalysis(analysisText);
 
       // Save to analyzed hexes if it doesn't already exist or update it
       setAnalyzedHexes(prev => {
         const existing = prev.findIndex(h => h.hex === hexData.hex);
-        const entry = { ...hexData, analysis: result, timestamp: new Date().toISOString() };
+        const entry = { ...hexData, analysis: analysisText, timestamp: new Date().toISOString() };
         if (existing !== -1) {
           const updated = [...prev];
           updated[existing] = entry;
@@ -3852,11 +4227,45 @@ export default function App() {
     } finally {
       setIsHexAnalyzing(false);
     }
+  }, [ai]);
+
+  const [isVerifyingCadastral, setIsVerifyingCadastral] = useState(false);
+  const [cadastralData, setCadastralData] = useState<any>(null);
+
+  const handleVerifyCadastral = async () => {
+    if (!newAsset.address || newAsset.address.length < 3) {
+      setCreateError("Insufficient Identification Data. Please provide a full address or a standard cadastral ID (e.g. 77:01:0001001:101) to verify this location.");
+      return;
+    }
+    
+    setIsVerifyingCadastral(true);
+    setCreateError(null);
+    try {
+      // Logic: Backend Proxy verification
+      const cadNum = newAsset.address.replace(/[^0-9:]/g, ''); // Simple cleanup
+      const res = await fetch(`/api/v1/cadastral/${cadNum || '77:01:0001001:101'}`, {
+        headers: { 'x-user-id': user?.uid || 'anonymous' }
+      });
+      
+      if (!res.ok) throw new Error("The Real Estate Proxy service is currently unresponsive. Please verify details manually or try again later.");
+      const data = await res.json();
+      setCadastralData(data);
+      soundService.playSonar();
+      
+      // Auto-fill cost if found
+      if (data.value && newAsset.cost === 0) {
+        setNewAsset(prev => ({ ...prev, cost: data.value / 100 })); // Simulated market valuation
+      }
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : "Cadastral synchronization failed. Strategic service link severed.");
+    } finally {
+      setIsVerifyingCadastral(false);
+    }
   };
 
   const handleSuggestAssetType = async () => {
     if (!newAsset.address || newAsset.cost <= 0) {
-      setCreateError("Address and Cost required for AI analysis.");
+      setCreateError("Tactical Analysis Requires Data. Please provide the location address and approximate market cost before initializing AI pattern recognition.");
       return;
     }
     
@@ -3865,24 +4274,14 @@ export default function App() {
     setCreateError(null);
     
     try {
-      const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
-        contents: `Given an asset at "${newAsset.address}" costing $${newAsset.cost}, determine the optimal 'Type' and 'Visual Model'.
+      const prompt = `Given an asset at "${newAsset.address}" costing $${newAsset.cost}, determine the optimal 'Type' and 'Visual Model'.
         Allowed Types: retail, office, warehouse, residential.
         Allowed Models: house, apartment, warehouse, office.
-        Output JSON with keys: "type", "model", "reason" (brief justification).`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              type: { type: Type.STRING },
-              model: { type: Type.STRING },
-              reason: { type: Type.STRING }
-            },
-            required: ["type", "model", "reason"]
-          }
-        }
+        Output JSON with keys: "type", "model", "reason" (brief justification).`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-1.5-flash",
+        contents: [{ parts: [{ text: prompt }] }]
       });
       
       const res = JSON.parse(response.text || '{}');
@@ -3890,7 +4289,7 @@ export default function App() {
       soundService.playSonar();
     } catch (error) {
       console.error("AI Suggestion Error:", error);
-      setCreateError("AI node unavailable. Manual entry required.");
+      setCreateError("AI Intelligence Link Offline. The pattern recognition node is currently unavailable. Please enter asset parameters manually or try again when connection is restored.");
     } finally {
       setIsSuggesting(false);
     }
@@ -3901,12 +4300,35 @@ export default function App() {
     setIsCreating(true);
     setCreateError(null);
     try {
+      // 🏦 Step 1: Initiate Bank Escrow (Combat Layer)
+      const idempotencyKey = `PAY_${user.uid}_${Date.now()}`;
+      const paymentResp = await fetch('/api/v1/payments/escrow/init', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_id: user.uid,
+          amount: newAsset.cost,
+          idempotency_key: idempotencyKey,
+          syndicate_id: "YARD_INVEST_ALPHA"
+        })
+      });
+
+      if (!paymentResp.ok) {
+        const pErr = await paymentResp.json();
+        throw new Error(pErr.error || "Tactical Funds Authorization Failed. The central bank bridge is unresponsive. Please ensure your account has sufficient strategic units and try again.");
+      }
+
+      const pData = await paymentResp.json();
+      console.log(`[BANK] Escrow pending: ${pData.ref}`);
+
+      // 🗺️ Step 2: Persistent Storage
       const roi = newAsset.cost > 0 ? (newAsset.yield * 12 / newAsset.cost) * 100 : 0;
       const assetData = {
         ...newAsset,
         roi,
-        status: 0, // Default stable
-        ownerUid: user.uid
+        status: 0,
+        ownerUid: user.uid,
+        bankRef: pData.ref
       };
       
       const res = await fetch('/api/assets', {
@@ -3917,7 +4339,7 @@ export default function App() {
       
       if (!res.ok) {
         const errorData = await res.json();
-        throw new Error(errorData.error || "Failed to create asset");
+        throw new Error(errorData.error || "Asset Ledger Synchronization Failed. The central registry rejected the deployment. This may be due to regional restrictions or database maintenance.");
       }
       
       const data = await res.json();
@@ -3925,11 +4347,8 @@ export default function App() {
       setBalance(data.balance);
       
       // Success notification
-      const notification = document.createElement('div');
-      notification.className = 'fixed bottom-24 left-1/2 -translate-x-1/2 z-[200] apple-glass px-6 py-3 rounded-2xl border border-primary/30 text-primary font-bold text-xs uppercase tracking-widest shadow-2xl animate-bounce';
-      notification.innerText = 'Strategic Asset Deployed Successfully';
-      document.body.appendChild(notification);
-      setTimeout(() => notification.remove(), 3000);
+      addNotification('success', 'Strategic Asset Deployed', `Asset "${newAsset.title}" has been successfully appended to the central registry and assigned to your authority.`);
+      soundService.playSuccess();
 
       setCreateModalOpen(false);
       setNewAsset({
@@ -3944,11 +4363,13 @@ export default function App() {
         longitude: viewState.longitude,
         sqft: 0,
         yearBuilt: new Date().getFullYear(),
-        parkingSpaces: 0
+        parkingSpaces: 0,
+        roi: 0
       });
     } catch (error) {
       console.error("Asset creation error:", error);
-      setCreateError(error instanceof Error ? error.message : "Failed to create asset. Check your connection.");
+      setCreateError(error instanceof Error ? error.message : "Deployment Failure. Critical system error during asset registry. Verify uplink status and try again.");
+      soundService.playDenied();
     } finally {
       setIsCreating(false);
     }
@@ -3995,37 +4416,41 @@ export default function App() {
   ], [t]);
 
   // Gemini Initialization
-  const ai = useMemo(() => new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' }), []);
-
-  // Rule 1: "Quiet" Frontend - Layers
-  const staticLayers = useMemo(() => [
-    showGrid ? new PathLayer({
+  
+  // Tactical Grid Lines Layer
+  const tacticalGridLayer = useMemo(() => {
+    if (!showGrid) return null;
+    return new PathLayer({
       id: 'tactical-grid-map',
       data: gridLines,
       getPath: (d: any) => d.path,
-      getColor: [255, 255, 255, gridBrightness * 150],
+      getColor: [255, 255, 255, debouncedGridBrightness * 150],
       getWidth: 1,
       widthUnits: 'pixels',
       updateTriggers: {
-        getColor: [gridBrightness]
+        getColor: [debouncedGridBrightness]
       }
-    } as any) : null,
-    showHexGrid ? new H3HexagonLayer({
+    } as any);
+  }, [showGrid, gridLines, debouncedGridBrightness]);
+
+  // Tactical Hex Districts Layer
+  const hexLayer = useMemo(() => {
+    if (!showHexGrid) return null;
+    return new H3HexagonLayer({
       id: 'tactical-hex-grid',
       data: hexDistricts,
       getHexagon: (d: any) => d.hex,
       getFillColor: (d: any) => {
-        // Aesthetic: Dark Emerald for secure, Amber for active
-        if (d.occupancy > 80) return [255, 100, 0, 100]; // Amber/Alert
-        if (d.occupancy > 50) return [0, 255, 150, 60]; // Normal/Active
-        return [0, 150, 255, 40]; // Low activity/Quiet
+        if (d.occupancy > 80) return [255, 100, 0, 100];
+        if (d.occupancy > 50) return [0, 255, 150, 60];
+        return [0, 150, 255, 40];
       },
       getLineColor: [255, 255, 255, 30],
       lineWidthMinPixels: 1,
       filled: true,
       stroked: true,
       pickable: true,
-      extruded: false, // Keep it flat for "District Overview"
+      extruded: false,
       onHover: (info: any) => {
         if (info.object) {
           setHoverInfo({
@@ -4047,16 +4472,17 @@ export default function App() {
         }
       },
       updateTriggers: {
-        getFillColor: [pulse] // Could animate if needed
+        getFillColor: [0] // Decoupled from pulse for performance
       }
-    }) : null,
-    createRiskRadarLayer(viewState.zoom, showRiskRadar, (info) => setHoverInfo(info)),
-    createStrategicNodesLayer(viewState.zoom, showRiskRadar, (info) => setHoverInfo(info)),
-    createInfrastructureTwinLayer(viewState.zoom, showInfraPower, 'power'),
-    createInfrastructureTwinLayer(viewState.zoom, showInfraComm, 'comm'),
-    createFutureProjectsLayer(viewState.zoom, showFutureProjects, simulationYear, (info) => setHoverInfo(info)),
-    showBuildings && filteredBuildings ? createBuildingsLayer(
-      filteredBuildings,
+    });
+  }, [showHexGrid, hexDistricts]);
+
+  // Buildings Layer
+  const buildingsLayer = useMemo(() => {
+    const dataToUse = simulatedBuildings?.features ? simulatedBuildings : filteredBuildings;
+    if (!showBuildings || !dataToUse) return null;
+    return createBuildingsLayer(
+      dataToUse,
       (info) => {
         if (info?.id && info.id !== hoverInfo?.id) {
           soundService.playClick();
@@ -4067,24 +4493,80 @@ export default function App() {
         setSelectedBuilding(info);
         setLastInteraction(Date.now());
         setIsAutoRotating(false);
+        
+        // Fetch detailed properties
+        if (info && info.id) {
+          setIsFetchingDetails(true);
+          fetch(`/api/v1/buildings/${info.id}`)
+            .then(res => res.json())
+            .then(data => {
+              setBuildingDetails(data);
+              setIsFetchingDetails(false);
+            })
+            .catch(err => {
+              console.error("Error fetching detailed building data:", err);
+              setIsFetchingDetails(false);
+            });
+        }
       },
-      pulse,
+      0, // pulse decoupled
       selectedBuilding?.id || null,
       hoverInfo?.id || null,
       viewState.zoom,
-      buildingScanlineIntensity,
+      debouncedBuildingScanlineIntensity,
       dataOnlyMode,
       investorCabinetOpen,
       portfolio,
       simulationYear,
       simulationParams
-    ) : null,
-    showTraffic && roadsData.length > 0 ? createTrafficLayer(
+    );
+  }, [
+    showBuildings, 
+    filteredBuildings, 
+    selectedBuilding?.id, 
+    hoverInfo?.id, 
+    viewState.zoom, 
+    debouncedBuildingScanlineIntensity, 
+    dataOnlyMode, 
+    investorCabinetOpen, 
+    portfolio, 
+    simulationYear, 
+    simulationParams
+  ]);
+
+  // Traffic Layer
+  const trafficLayer = useMemo(() => {
+    if (!showTraffic || !roadsData.length) return null;
+    return createTrafficLayer(
       roadsData,
       0, // Time handled in overlay component
       showTraffic
-    ) : null
-  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, hoverInfo, viewState.zoom, buildingScanlineIntensity, dataOnlyMode, investorCabinetOpen, portfolio, showTraffic, roadsData, showHexGrid, hexDistricts, showRiskRadar, showInfraPower, showInfraComm, showFutureProjects, simulationYear, simulationParams]);
+    );
+  }, [showTraffic, roadsData]);
+
+  // Rule 1: "Quiet" Frontend - Layers Assembly (Optimized via decomposition)
+  const staticLayers = useMemo(() => [
+    tacticalGridLayer,
+    hexLayer,
+    createRiskRadarLayer(viewState.zoom, showRiskRadar, (info) => setHoverInfo(info)),
+    createStrategicNodesLayer(viewState.zoom, showRiskRadar, (info) => setHoverInfo(info)),
+    createInfrastructureTwinLayer(viewState.zoom, showInfraPower, 'power'),
+    createInfrastructureTwinLayer(viewState.zoom, showInfraComm, 'comm'),
+    createFutureProjectsLayer(viewState.zoom, showFutureProjects, simulationYear, (info) => setHoverInfo(info)),
+    buildingsLayer,
+    trafficLayer
+  ].flat().filter(Boolean), [
+    tacticalGridLayer,
+    hexLayer,
+    viewState.zoom,
+    showRiskRadar,
+    showInfraPower,
+    showInfraComm,
+    showFutureProjects,
+    simulationYear,
+    buildingsLayer,
+    trafficLayer
+  ]);
 
   const handleCreateSyndicate = (building: BuildingInfo) => {
     if (!user) {
@@ -4467,59 +4949,20 @@ export default function App() {
 
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-1.5-flash",
         contents: [
           ...messages.map(m => ({ 
-            role: m.role === 'user' ? 'user' : 'model', 
             parts: [{ text: m.content }] 
           })), 
-          { role: 'user', parts: [{ text: currentInput }] }
-        ],
-        config: {
-          systemInstruction: "You are a real estate analyst for Yard Invest. Use the search_buildings tool to find properties and analyze_building to get detailed investment metrics for a specific building. Always provide a concise investment recommendation based on the data.",
-          tools: [{ functionDeclarations: [searchBuildingsTool, analyzeBuildingTool] }]
-        }
+          { parts: [{ text: currentInput }] }
+        ]
       });
 
-      const functionCalls = response.functionCalls;
-      if (functionCalls) {
-        for (const call of functionCalls) {
-          let toolData;
-          if (call.name === 'search_buildings') {
-            const res = await fetch('/api/v1/ai/search', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(call.args)
-            });
-            toolData = await res.json();
-          } else if (call.name === 'analyze_building') {
-            const res = await fetch('/api/v1/ai/analyze', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(call.args)
-            });
-            toolData = await res.json();
-          }
-
-          if (toolData) {
-            const finalResponse = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: [
-                { role: 'user', parts: [{ text: currentInput }] },
-                { role: 'model', parts: [{ text: `Executing ${call.name}...` }] },
-                { role: 'user', parts: [{ text: `Tool result: ${JSON.stringify(toolData)}` }] }
-              ]
-            });
-            
-            setMessages(prev => [...prev, { role: 'assistant', content: finalResponse.text || "I've analyzed the data for you." }]);
-          }
-        }
-      } else {
-        setMessages(prev => [...prev, { role: 'assistant', content: response.text || "I'm not sure how to help with that." }]);
-      }
+      setMessages(prev => [...prev, { role: 'assistant', content: response.text || "I've analyzed the data for you." }]);
     } catch (error) {
       console.error(error);
-      setMessages(prev => [...prev, { role: 'assistant', content: "Sorry, I encountered an error processing your request." }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: "AI Strategic Analytics Link severed. The neural processing cluster is currently overloaded or experiencing interference. Please restate your strategic query in a few moments." }]);
+      addNotification('error', 'Neural Link Interrupted', 'Gemini AI node reported a timeout or processing exception.');
     } finally {
       setIsTyping(false);
     }
@@ -4584,6 +5027,14 @@ export default function App() {
                     <span className="opacity-50">{">"}</span>
                     <span>ACCESS GRANTED. LOADING GEOSPATIAL OVERLAY.</span>
                   </motion.div>
+                  <div className="w-full h-1 bg-white/5 rounded-full overflow-hidden mt-4">
+                    <motion.div 
+                      initial={{ width: "0%" }}
+                      animate={{ width: "100%" }}
+                      transition={{ duration: 3, ease: "linear" }}
+                      className="h-full bg-primary"
+                    />
+                  </div>
                 </>
               )}
 
@@ -4642,10 +5093,78 @@ export default function App() {
   }
 
   return (
-    <AppErrorBoundary>
+    <Profiler id="App_Intelligence_Core" onRender={onRenderCallback}>
+      <AppErrorBoundary>
       <div className="relative w-full h-screen bg-base overflow-hidden font-sans text-slate-200">
       
+      {/* Skeleton Loading Overlay */}
+      <AnimatePresence>
+        {modelLoadingStatus.loaded < modelLoadingStatus.total && modelLoadingStatus.total > 0 && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 z-[500] bg-slate-950/80 backdrop-blur-xl flex flex-col items-center justify-center pointer-events-auto"
+          >
+            <div className="w-64 space-y-4">
+               <div className="flex justify-between items-end">
+                  <div className="space-y-1">
+                    <p className="text-[10px] text-primary font-bold uppercase tracking-[0.2em] animate-pulse">Initializing Orbitals</p>
+                    <p className="text-[8px] text-slate-500 uppercase tracking-widest">Reconstructing Strategic 3D Nodes</p>
+                  </div>
+                  <p className="text-[10px] font-mono text-white">{Math.round((modelLoadingStatus.loaded / modelLoadingStatus.total) * 100)}%</p>
+               </div>
+               <div className="h-1 w-full bg-white/5 rounded-full overflow-hidden border border-white/5">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: `${(modelLoadingStatus.loaded / modelLoadingStatus.total) * 100}%` }}
+                    className="h-full bg-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.5)]"
+                  />
+               </div>
+               <div className="flex justify-center gap-1">
+                  {Array.from({ length: modelLoadingStatus.total }).map((_, i) => (
+                    <div 
+                      key={i} 
+                      className={cn(
+                        "w-1 h-1 rounded-full transition-all duration-500",
+                        i < modelLoadingStatus.loaded ? "bg-primary" : "bg-white/10"
+                      )} 
+                    />
+                  ))}
+               </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Cinematic Overlays */}
+      {displayMode === 'radar' && (
+        <RadarOverlay 
+          center={[viewState.longitude, viewState.latitude]} 
+          radius={1000} 
+          rotation={radarRotation} 
+        />
+      )}
+
+      {displayMode === 'glitch' && (
+        <GlitchOverlay active={true} intensity={glitchIntensity} />
+      )}
+
+      {/* Tactical UI Layers (Redux-Powered) */}
+      <TacticalDashboard />
+      <StrategicTicker />
+
+      <AssetRegistrationModal 
+        isOpen={isRegistrationModalOpen}
+        onClose={() => dispatch(setRegistrationModalOpen(false))}
+        onRegister={(newAsset) => {
+          console.log('New Asset Registered:', newAsset);
+          // In a real app, we'd add to the database/portfolio
+          setPortfolio(prev => [...prev, newAsset.id]);
+          // Optional: Add notification
+        }}
+      />
+
       <FloatingParticles />
       {uiStyle === 'tactical' && (
         <>
@@ -4735,10 +5254,10 @@ export default function App() {
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/40 via-transparent to-slate-950/20" />
       </div>
 
-      {/* Search Bar */}
-      <div className="absolute top-24 left-4 sm:left-6 md:left-8 z-40 w-[calc(100%-2rem)] sm:w-80 md:w-96 pointer-events-none">
+      {/* Search Bar HUD - Integrated Positioning */}
+      <div className="fixed top-20 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] sm:w-80 md:w-96 z-40 pointer-events-none transform">
         <div className="flex flex-col gap-2 pointer-events-auto">
-          <div className="apple-glass rounded-xl flex items-center px-4 py-2.5 sm:py-3 group focus-within:ring-1 ring-primary/30 transition-all bg-slate-900/40 backdrop-blur-xl border border-white/5 shadow-2xl">
+          <div className="apple-glass rounded-xl flex items-center px-4 py-2.5 sm:py-2 focus-within:ring-1 ring-primary/30 transition-all border border-white/5 shadow-2xl">
             <div className="relative flex items-center justify-center">
               <Search className={cn("w-4 h-4 text-slate-500 group-focus-within:text-primary transition-colors", isSearching && "opacity-0")} />
               {isSearching && (
@@ -4758,7 +5277,7 @@ export default function App() {
               placeholder={t.searchPlaceholder}
               className="flex-1 bg-transparent border-none outline-none px-3 text-[10px] sm:text-xs font-display tracking-[0.15em] text-slate-200 placeholder:text-slate-700 uppercase"
             />
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 sm:gap-2">
               {(searchQuery.trim() || searchMarker) && (
                 <button 
                   onClick={() => {
@@ -4766,33 +5285,35 @@ export default function App() {
                     setSearchResults([]);
                     setSearchMarker(null);
                   }}
-                  className="p-1 hover:bg-white/5 rounded-lg text-slate-500 transition-colors"
+                  className="p-2 sm:p-1 hover:bg-white/5 rounded-lg text-slate-500 transition-colors"
                   title="Clear Search"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                 </button>
               )}
               {searchQuery.trim() && (
                 <button 
                   onClick={handleSearch}
-                  className="p-1 hover:bg-white/5 rounded-lg text-primary transition-colors"
+                  className="p-2 sm:p-1 hover:bg-white/5 rounded-lg text-primary transition-colors"
                   title="Execute Search"
                 >
-                  <Send className="w-3.5 h-3.5" />
+                  <Send className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                 </button>
               )}
               <button 
                 onClick={() => setFiltersOpen(!filtersOpen)}
                 className={cn(
-                  "p-1 rounded-lg transition-colors flex items-center gap-1.5 relative",
+                  "p-2 sm:p-1 rounded-lg transition-colors flex items-center gap-1.5 relative min-w-[32px] justify-center",
                   filtersOpen ? "bg-primary/20 text-primary" : "glass-hover text-slate-500"
                 )}
               >
-                <Filter className="w-3.5 h-3.5" />
+                <Filter className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
                 {(filters.statuses.length < 3 || filters.minRoi > 0 || filters.owner) && !filtersOpen && (
-                  <span className="absolute -top-1 -right-1 w-2 h-2 bg-primary rounded-full border border-slate-900 animate-pulse" />
+                  <span className="absolute top-1 right-1 w-2 h-2 bg-primary rounded-full border border-slate-900 animate-pulse" />
                 )}
-                {filtersOpen ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
+                <div className="hidden xs:block">
+                  {filtersOpen ? <ChevronUp className="w-2.5 h-2.5" /> : <ChevronDown className="w-2.5 h-2.5" />}
+                </div>
               </button>
               <div className="hidden sm:flex items-center gap-1.5 text-[9px] font-mono text-slate-500 bg-slate-800/30 px-1.5 py-0.5 rounded border border-white/5">
                 <Command className="w-2.5 h-2.5" />
@@ -4843,9 +5364,9 @@ export default function App() {
                 className="apple-glass rounded-2xl p-6 shadow-2xl border border-white/5 space-y-6"
               >
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  <div className="space-y-3">
+                  <div className="space-y-3 col-span-1 sm:col-span-2">
                     <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest px-1">{t.status}</label>
-                    <div className="grid grid-cols-1 gap-2">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                       {[
                         { id: 'stable', label: t.stable_status, color: 'text-emerald-400', icon: CheckCircle2, bg: 'bg-emerald-400/10', border: 'border-emerald-400/30' },
                         { id: 'risk', label: t.risk, color: 'text-red-400', icon: AlertTriangle, bg: 'bg-red-400/10', border: 'border-red-400/30' },
@@ -4931,7 +5452,7 @@ export default function App() {
       </div>
 
       {/* Rule 1: High Performance Map */}
-      <div className="relative w-full h-full z-0 overflow-hidden">
+      <div className="absolute inset-0 z-0 overflow-hidden">
         {/* Digital Map Atmosphere */}
         <div className="absolute inset-0 z-[5] pointer-events-none overflow-hidden">
            <div className="digital-map-overlay opacity-30" />
@@ -5122,7 +5643,7 @@ export default function App() {
               initial={{ opacity: 0, x: 20, scale: 0.95 }}
               animate={{ opacity: 1, x: 0, scale: 1 }}
               exit={{ opacity: 0, x: 20, scale: 0.95 }}
-              className="absolute top-32 right-6 w-80 apple-glass rounded-2xl border border-primary/40 shadow-2xl p-5 pointer-events-auto z-50 overflow-hidden"
+              className="absolute top-32 right-4 sm:right-6 w-[calc(100%-2rem)] sm:w-80 apple-glass rounded-2xl border border-primary/40 shadow-2xl p-5 pointer-events-auto z-50 overflow-hidden"
             >
               <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-primary/0 via-primary to-primary/0" />
               
@@ -5163,7 +5684,7 @@ export default function App() {
                   </p>
                 </div>
 
-                <button className="w-full py-2.5 rounded-xl bg-primary text-base font-bold text-[10px] uppercase tracking-widest hover:bg-primary/90 transition-all shadow-[0_0_20px_rgba(var(--primary-accent),0.3)]">
+                <button className="w-full py-2.5 rounded-xl bg-primary text-base font-bold text-[10px] uppercase tracking-widest hover:bg-primary/90 transition-all shadow-[0_0_20px_rgba(var(--primary-accent),0.3)] whitespace-nowrap">
                   Access Detailed Briefing
                 </button>
               </div>
@@ -5192,30 +5713,21 @@ export default function App() {
         </div>
         
         {/* Header */}
-        <header className="absolute top-0 left-0 w-full flex justify-center pointer-events-none h-20 sm:h-24 pt-4 sm:pt-6 px-4 sm:px-6 z-[60]">
+        <header className="fixed top-0 left-0 w-full flex justify-center pointer-events-none h-16 sm:h-20 pt-3 px-4 z-[100]">
           <div className="w-full max-w-screen-2xl flex items-center justify-between gap-4 pointer-events-none">
             <div className="flex items-center gap-3 min-w-0 pointer-events-auto">
-            <button 
-              onClick={() => setDashboardOpen(!dashboardOpen)}
-              className={cn(
-                "w-9 h-9 apple-glass rounded-xl flex-shrink-0 flex items-center justify-center border border-white/10 text-slate-400 hover:text-white transition-all shadow-xl",
-                dashboardOpen && "hidden sm:flex"
-              )}
-            >
-              {dashboardOpen ? <ChevronUp className="-rotate-90 w-4 h-4" /> : <ChevronUp className="rotate-90 w-4 h-4" />}
-            </button>
-            <div className="flex flex-col min-w-0">
-              <h1 className="text-base sm:text-lg font-bold tracking-tight flex items-center gap-2 text-white truncate">
-                <div className="hidden xs:flex w-7 h-7 bg-primary rounded-lg items-center justify-center shadow-[0_0_15px_rgba(var(--primary-accent),0.5)] border border-white/20 flex-shrink-0">
-                  <Building2 className="w-4 h-4" />
-                </div>
-                <span className="homm-heading text-lg sm:text-xl truncate leading-tight">{t.title}</span>
-              </h1>
-              <p className="text-[7px] text-slate-500 uppercase tracking-[0.2em] font-mono truncate hidden xs:block leading-none mt-0.5">
-                {t.subtitle}
-              </p>
+              <button 
+                onClick={() => setDashboardOpen(!dashboardOpen)}
+                className="w-10 h-10 apple-glass rounded-xl flex-shrink-0 flex items-center justify-center border border-white/10 text-slate-400 hover:text-white transition-all shadow-xl"
+              >
+                {dashboardOpen ? <ChevronLeft className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+              </button>
+              <div className="flex flex-col min-w-0">
+                <h1 className="text-sm font-bold tracking-tight flex items-center gap-2 text-white truncate uppercase">
+                  <span className="homm-heading text-lg sm:text-xl truncate leading-tight tracking-[0.1em]">{t.title}</span>
+                </h1>
+              </div>
             </div>
-          </div>
 
           <div className="flex items-center gap-2 flex-shrink-0 pointer-events-auto">
             {/* Unified Tactical Control Bar */}
@@ -5226,7 +5738,7 @@ export default function App() {
                 className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 hover:bg-emerald-500/20 active:scale-95 transition-all group"
               >
                 <LayoutDashboard className="w-3.5 h-3.5" />
-                <span className="hidden lg:inline text-[9px] font-mono font-bold uppercase tracking-widest">ST_Cabinet</span>
+                <span className="hidden sm:inline text-[9px] font-mono font-bold uppercase tracking-widest leading-none">ST_Cabinet</span>
               </button>
 
               {/* Financial Status (Treasury) */}
@@ -5289,7 +5801,7 @@ export default function App() {
                           <div className="flex items-center gap-4 text-left">
                             <div className="relative">
                               <div className="w-14 h-14 bg-gradient-to-br from-primary to-secondary rounded-2xl flex items-center justify-center shadow-lg">
-                                {user.photoURL ? (
+                                {user?.photoURL ? (
                                   <img src={user.photoURL} alt="" className="w-full h-full object-cover rounded-2xl" />
                                 ) : (
                                   <User className="w-7 h-7 text-white" />
@@ -5298,8 +5810,8 @@ export default function App() {
                               <div className="absolute -bottom-1 -right-1 w-5 h-5 bg-emerald-500 border-2 border-slate-900 rounded-full" />
                             </div>
                             <div>
-                              <h3 className="text-base font-display font-bold text-white tracking-tight">{user.displayName || user.email?.split('@')[0]}</h3>
-                              <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">{user.email}</p>
+                              <h3 className="text-base font-display font-bold text-white tracking-tight">{user?.displayName || user?.email?.split('@')[0] || 'Unknown User'}</h3>
+                              <p className="text-[10px] text-slate-500 font-mono uppercase tracking-widest">{user?.email}</p>
                             </div>
                           </div>
                           <button 
@@ -5434,14 +5946,14 @@ export default function App() {
                         <LayoutDashboard className="w-3 h-3" />
                         {t.uiStyle}
                       </label>
-                      <div className="flex gap-2">
+                      <div className="grid grid-cols-2 gap-2">
                         <button
                           onClick={() => {
                             setUiStyle('tactical');
                             setBasemap('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
                           }}
                           className={cn(
-                            "flex-1 flex flex-col items-center gap-2 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all",
+                            "flex flex-col items-center gap-2 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all w-full",
                             uiStyle === 'tactical' 
                               ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
                               : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
@@ -5456,7 +5968,7 @@ export default function App() {
                             setBasemap('https://basemaps.cartocdn.com/gl/voyager-gl-style/style.json');
                           }}
                           className={cn(
-                            "flex-1 flex flex-col items-center gap-2 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all",
+                            "flex flex-col items-center gap-2 p-3 rounded-xl text-[9px] font-bold uppercase tracking-widest border transition-all w-full",
                             uiStyle === 'professional' 
                               ? "bg-primary/10 border-primary/50 text-primary shadow-[0_0_15px_rgba(var(--primary-accent-rgb),0.1)]" 
                               : "bg-slate-950/40 border-white/5 text-slate-500 hover:border-white/10"
@@ -5654,7 +6166,7 @@ export default function App() {
             </AnimatePresence>
 
       {/* Operations Command Hub (Consolidated) */}
-      <div className="absolute left-4 sm:left-6 top-[30%] translate-y-0 flex flex-col gap-3 pointer-events-auto z-[70]">
+      <div className="fixed left-4 top-[15%] flex flex-col gap-3 pointer-events-auto z-[70]">
         
         {/* Hub Control Toggle */}
         <div className="relative group">
@@ -5719,9 +6231,9 @@ export default function App() {
                           layer.active ? "bg-white/5 text-white border border-white/10" : "text-slate-500 hover:bg-white/5"
                         )}
                       >
-                        <div className="flex items-center gap-2.5">
-                          <layer.icon className="w-3.5 h-3.5" />
-                          {layer.label}
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <layer.icon className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate whitespace-nowrap">{layer.label}</span>
                         </div>
                         <div className={cn("w-1.5 h-1.5 rounded-full", layer.active ? "bg-primary pulsate-glow" : "bg-slate-800")} />
                       </button>
@@ -5753,9 +6265,9 @@ export default function App() {
                           layer.active ? "bg-primary/10 text-primary border border-primary/20" : "text-slate-500 hover:bg-white/5"
                         )}
                       >
-                        <div className="flex items-center gap-2.5">
-                          <layer.icon className="w-3.5 h-3.5" />
-                          {layer.label}
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <layer.icon className="w-3.5 h-3.5 shrink-0" />
+                          <span className="truncate whitespace-nowrap">{layer.label}</span>
                         </div>
                         <div className={cn("w-1.5 h-1.5 rounded-full", layer.active ? "bg-primary pulsate-glow" : "bg-slate-800")} />
                       </button>
@@ -5770,8 +6282,50 @@ export default function App() {
                     <span className="text-[9px] font-bold text-slate-400 uppercase tracking-widest italic animate-pulse">Neural_Simulation_FC</span>
                   </div>
                   
-                  <div className="space-y-4 px-1">
-                    <div className="space-y-1.5">
+                  <div className="space-y-4 px-1 pb-4">
+                     {/* Display Mode Selection */}
+                    <div className="space-y-2">
+                       <span className="text-[8px] text-slate-500 font-bold uppercase tracking-widest">Tactical Visualization Mode</span>
+                       <div className="grid grid-cols-2 gap-1.5">
+                          {[
+                            { id: 'normal', label: 'Standard', icon: LayoutDashboard },
+                            { id: 'nvg', label: 'Night Vision', icon: Moon },
+                            { id: 'thermal', label: 'Thermal IR', icon: Zap },
+                            { id: 'radar', label: 'Sonar Sweep', icon: Radar },
+                            { id: 'glitch', label: 'Bit Corruption', icon: AlertTriangle }
+                          ].map(mode => (
+                            <button
+                              key={mode.id}
+                              onClick={() => setDisplayMode(mode.id as any)}
+                              className={cn(
+                                "flex items-center gap-2 px-2 py-1.5 rounded-lg text-[8px] font-display uppercase tracking-widest transition-all border",
+                                displayMode === mode.id 
+                                  ? "bg-primary/20 border-primary/40 text-primary shadow-[0_0_10px_rgba(var(--primary-accent-rgb),0.2)]" 
+                                  : "bg-white/5 border-white/5 text-slate-500 hover:text-slate-300"
+                              )}
+                            >
+                              <mode.icon className="w-3 h-3" />
+                              {mode.label}
+                            </button>
+                          ))}
+                       </div>
+                    </div>
+
+                    {displayMode === 'glitch' && (
+                      <div className="space-y-1.5 pt-2 border-t border-white/5">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[8px] text-red-500 font-bold uppercase">Corruption Intensity</span>
+                          <span className="text-[8px] text-red-500 font-mono">{(glitchIntensity * 100).toFixed(0)}%</span>
+                        </div>
+                        <input 
+                          type="range" min="0" max="1" step="0.05" value={glitchIntensity}
+                          onChange={(e) => setGlitchIntensity(parseFloat(e.target.value))}
+                          className="w-full h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-red-500"
+                        />
+                      </div>
+                    )}
+                  
+                    <div className="space-y-1.5 pt-4 border-t border-white/5">
                       <div className="flex justify-between items-center">
                         <span className="text-[8px] text-slate-500 font-bold uppercase">Rent Rate Base</span>
                         <span className={cn("text-[8px] font-mono font-bold", simulationParams.rentRate >= 0 ? "text-emerald-400" : "text-red-400")}>
@@ -5833,7 +6387,7 @@ export default function App() {
                         className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 text-slate-300 transition-all text-left group"
                       >
                         <btn.icon className="w-3.5 h-3.5 text-slate-500 group-hover:text-primary transition-colors" />
-                        <span className="text-[9px] font-display font-medium uppercase tracking-wider">{btn.label}</span>
+                        <span className="text-[9px] font-display font-medium uppercase tracking-wider whitespace-nowrap">{btn.label}</span>
                       </button>
                     ))}
                   </div>
@@ -5879,7 +6433,7 @@ export default function App() {
                 </div>
                 
                 <button 
-                  onClick={() => setFilters({ statuses: ['stable', 'risk', 'anomalous'], minRoi: 0, owner: '' })}
+                  onClick={handleResetFilters}
                   className="w-full py-2 text-[8px] text-slate-500 hover:text-primary uppercase font-bold tracking-widest border border-white/5 rounded-xl hover:bg-white/5 transition-all"
                 >
                   Hard Reset Strategy
@@ -5891,12 +6445,12 @@ export default function App() {
       </div>
 
       {/* Global Navigation Sector (Right) */}
-      <div className="absolute right-4 sm:right-6 top-[30%] translate-y-0 flex flex-col gap-3 pointer-events-auto z-[70]">
+      <div className="fixed right-4 top-[15%] flex flex-col gap-3 pointer-events-auto z-[70]">
         
         {/* Layer Visibility Toggle (Quick) */}
         <div className="relative group">
           <button 
-            onClick={() => setLayersMenuOpen(!layersMenuOpen)}
+            onClick={handleToggleLayersMenu}
             className={cn(
               "apple-glass rounded-lg w-[30px] h-[30px] flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
               layersMenuOpen ? "bg-primary/20 border-primary/40 text-primary shadow-[0_0_15px_rgba(var(--primary-accent),0.3)]" : "border-white/5 text-slate-500 glass-hover"
@@ -5920,10 +6474,7 @@ export default function App() {
                     {basemaps.map(m => (
                       <button
                         key={m.id}
-                        onClick={() => {
-                          setBasemap(m.url);
-                          soundService.playClick();
-                        }}
+                        onClick={() => handleBasemapSelect(m)}
                         className={cn(
                           "flex items-center gap-3 p-2 rounded-lg text-[10px] font-display uppercase tracking-wider transition-all",
                           JSON.stringify(basemap) === JSON.stringify(m.url) ? "bg-primary/20 text-primary border border-primary/30" : "text-slate-400 hover:bg-white/5"
@@ -5942,7 +6493,7 @@ export default function App() {
 
         {/* Legend Toggle */}
         <button 
-          onClick={() => setLegendOpen(!legendOpen)}
+          onClick={handleToggleLegend}
           className={cn(
             "apple-glass rounded-lg w-[30px] h-[30px] flex items-center justify-center transition-all border shadow-lg group-hover:scale-105 active:scale-95",
             legendOpen ? "bg-amber-500/20 border-amber-500/40 text-amber-500" : "border-white/5 text-slate-500 glass-hover"
@@ -6267,13 +6818,35 @@ export default function App() {
                     </div>
                   ))}
                   {isTyping && (
-                    <div className="flex items-center gap-2 text-primary p-2">
-                      <div className="flex gap-1">
-                        <motion.div animate={{ opacity: [0, 1, 0] }} transition={{ repeat: Infinity, duration: 1 }} className="w-1 h-3 bg-primary" />
-                        <motion.div animate={{ opacity: [0, 1, 0] }} transition={{ repeat: Infinity, duration: 1, delay: 0.2 }} className="w-1 h-3 bg-primary" />
-                        <motion.div animate={{ opacity: [0, 1, 0] }} transition={{ repeat: Infinity, duration: 1, delay: 0.4 }} className="w-1 h-3 bg-primary" />
+                    <div className="flex flex-col max-w-[85%] mr-auto items-start">
+                      <div className="bg-white/5 text-slate-300 border border-white/10 rounded-xl rounded-tl-none px-3 py-2 text-[10px] font-mono leading-relaxed w-full min-w-[200px]">
+                        <div className="flex items-center justify-between mb-2 pb-1 border-b border-white/5">
+                          <span className="opacity-40 mr-1 text-[8px] tracking-widest">[INTEL_FLOW]:</span>
+                          <div className="flex gap-1.5">
+                            {[1, 2, 3].map(i => (
+                              <motion.div 
+                                key={i}
+                                animate={{ scale: [1, 1.3, 1], opacity: [0.3, 1, 0.3], rotate: [0, 90, 0] }} 
+                                transition={{ repeat: Infinity, duration: 1.5, delay: i * 0.2 }} 
+                                className="w-1.5 h-1.5 bg-primary/40 rounded-[2px] shadow-[0_0_8px_rgba(var(--primary-accent),0.4)]" 
+                              />
+                            ))}
+                          </div>
+                        </div>
+                        <div className="space-y-2.5 my-3">
+                          <Skeleton className="h-2 w-full" />
+                          <Skeleton className="h-2 w-[92%]" />
+                          <Skeleton className="h-2 w-[78%]" />
+                        </div>
+                        <div className="flex items-center gap-3 text-primary mt-4 pt-2 border-t border-white/5">
+                          <div className="flex gap-1.5 items-end h-3">
+                            <motion.div animate={{ height: ["40%", "100%", "40%"] }} transition={{ repeat: Infinity, duration: 0.8 }} className="w-1 bg-primary/40" />
+                            <motion.div animate={{ height: ["60%", "100%", "20%"] }} transition={{ repeat: Infinity, duration: 1.2, delay: 0.2 }} className="w-1 bg-primary/70" />
+                            <motion.div animate={{ height: ["100%", "30%", "100%"] }} transition={{ repeat: Infinity, duration: 1.0, delay: 0.4 }} className="w-1 bg-primary" />
+                          </div>
+                          <span className="text-[8px] font-mono uppercase tracking-[0.25em] animate-pulse font-bold">Neural_Pattern_Synthesis...</span>
+                        </div>
                       </div>
-                      <span className="text-[8px] font-mono uppercase tracking-widest animate-pulse">Decrypting_Data...</span>
                     </div>
                   )}
                 </div>
@@ -6378,9 +6951,43 @@ export default function App() {
                     </div>
                     
                     {isHexAnalyzing ? (
-                      <div className="flex flex-col items-center justify-center py-10 space-y-4">
-                        <div className="w-10 h-10 border-2 border-primary/20 border-t-primary rounded-full animate-spin" />
-                        <span className="text-[10px] font-mono text-primary animate-pulse tracking-widest">DECRYPTING_DISTRICT_PATTERNS...</span>
+                      <div className="space-y-5 py-4">
+                        <div className="flex items-center justify-between mb-4">
+                           <div className="flex items-center gap-2">
+                              <div className="w-2 h-2 bg-primary rounded-full animate-ping" />
+                              <span className="text-[10px] font-mono font-bold text-primary uppercase tracking-[0.2em]">Neural_Advisory_Processing</span>
+                           </div>
+                           <div className="flex gap-1">
+                              {[1,2,3,4,5].map(i => (
+                                <motion.div 
+                                  key={i}
+                                  animate={{ opacity: [0.2, 1, 0.2] }}
+                                  transition={{ repeat: Infinity, duration: 1, delay: i * 0.1 }}
+                                  className="w-1 h-3 bg-primary/30"
+                                />
+                              ))}
+                           </div>
+                        </div>
+                        <div className="space-y-3">
+                          <Skeleton className="h-3 w-full" />
+                          <Skeleton className="h-3 w-5/6" />
+                          <Skeleton className="h-3 w-4/6" />
+                          <div className="pt-2">
+                             <Skeleton className="h-3 w-3/4" />
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-center justify-center py-6 border border-white/5 bg-white/[0.02] rounded-xl relative overflow-hidden mt-6">
+                          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-primary/5 to-transparent shimmer-anim" />
+                          <div className="w-12 h-12 rounded-full border border-primary/20 flex items-center justify-center mb-3 relative">
+                            <motion.div 
+                              animate={{ rotate: 360 }} 
+                              transition={{ repeat: Infinity, duration: 4, ease: "linear" }}
+                              className="absolute inset-0 border-t-2 border-primary rounded-full"
+                            />
+                            <Cpu className="w-6 h-6 text-primary/40" />
+                          </div>
+                          <span className="text-[9px] font-mono text-primary animate-pulse tracking-[0.3em] font-bold">DECRYPTING_DISTRICT_PATTERNS...</span>
+                        </div>
                       </div>
                     ) : (
                       <div className="markdown-body text-[11px] text-slate-300 leading-relaxed font-sans">
@@ -6398,28 +7005,28 @@ export default function App() {
                 </div>
               </div>
 
-              <div className="p-4 bg-[#050505] border-t border-white/10 flex justify-end">
+              <ButtonGroup justify="end" className="p-4 bg-[#050505] border-t border-white/10">
                 <button 
                   onClick={() => setSelectedHex(null)}
                   className="px-6 py-2 rounded-xl bg-primary text-slate-900 font-bold text-[10px] uppercase tracking-widest hover:bg-primary/90 transition-all shadow-[0_0_20px_rgba(var(--primary-accent),0.3)] active:scale-95"
                 >
                   Confirm Strategic Analysis
                 </button>
-              </div>
+              </ButtonGroup>
             </motion.div>
           </div>
         )}
       </AnimatePresence>
 
-      {/* Building Details Modal */}
+      {/* Building Details Panel - Managed Sidebar Layout */}
       <AnimatePresence>
         {selectedBuilding && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-0 sm:p-4 bg-base/80 backdrop-blur-md">
+          <div className="fixed inset-0 sm:inset-auto sm:top-20 sm:right-4 sm:bottom-4 z-[200] flex items-center justify-center sm:block p-0 sm:p-0 bg-base/60 backdrop-blur-md sm:bg-transparent sm:backdrop-blur-none pointer-events-none">
             <motion.div
-              initial={{ opacity: 0, scale: 0.9, y: 20 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9, y: 20 }}
-              className="relative w-full h-full sm:h-auto sm:max-w-xl apple-glass sm:rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-full sm:max-h-[90vh]"
+              initial={{ opacity: 0, x: 400 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 400 }}
+              className="relative w-full h-full sm:w-[420px] apple-glass shadow-[0_20px_60px_rgba(0,0,0,0.6)] overflow-hidden flex flex-col max-h-screen sm:max-h-full border-l border-white/10 pointer-events-auto"
             >
               {/* Header Image / Pattern */}
               <div className="h-24 sm:h-28 bg-gradient-to-br from-primary to-base relative overflow-hidden flex-shrink-0">
@@ -6626,11 +7233,61 @@ export default function App() {
                           <Markdown>{aiAnalysis}</Markdown>
                         </div>
                       </div>
+                    ) : isAnalyzing ? (
+                      <div className="space-y-4 py-4 px-1">
+                        <div className="flex items-center justify-between border-b border-primary/10 pb-2 mb-4">
+                          <div className="flex items-center gap-2">
+                            <div className="w-2 h-2 bg-primary rounded-full animate-ping shadow-[0_0_8px_rgba(var(--primary-accent),0.6)]" />
+                            <span className="text-[9px] font-mono text-primary uppercase tracking-[0.25em] font-bold">Heuristic_Node_Processing</span>
+                          </div>
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[7px] text-slate-500 uppercase font-bold tracking-widest">Buffer</span>
+                            <div className="w-16 h-1 bg-primary/10 rounded-full overflow-hidden">
+                              <motion.div 
+                                animate={{ width: ["0%", "45%", "65%", "90%", "100%"] }}
+                                transition={{ duration: 5, ease: "easeInOut", repeat: Infinity }}
+                                className="h-full bg-primary"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                        <div className="space-y-3">
+                          <div className="flex gap-4">
+                            <Skeleton className="h-16 w-1/3 rounded-xl" />
+                            <div className="flex-1 space-y-3">
+                               <Skeleton className="h-4 w-full" />
+                               <Skeleton className="h-4 w-[85%]" />
+                            </div>
+                          </div>
+                          <div className="space-y-2.5 pt-2">
+                            <Skeleton className="h-3 w-full" />
+                            <Skeleton className="h-3 w-[95%]" />
+                            <Skeleton className="h-3 w-[88%]" />
+                            <Skeleton className="h-3 w-[92%]" />
+                          </div>
+                          <div className="grid grid-cols-2 gap-3 pt-4">
+                            <Skeleton className="h-10 w-full rounded-lg" />
+                            <Skeleton className="h-10 w-full rounded-lg" />
+                          </div>
+                        </div>
+                        <div className="flex items-center justify-center pt-4">
+                           <div className="flex gap-2">
+                              {[0, 1, 2].map(i => (
+                                <motion.div 
+                                  key={i}
+                                  animate={{ height: [8, 20, 8] }}
+                                  transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }}
+                                  className="w-1 bg-primary/20 rounded-full"
+                                />
+                              ))}
+                           </div>
+                        </div>
+                      </div>
                     ) : (
-                      <div className="flex flex-col items-center justify-center py-4 border-2 border-dashed border-primary/10 rounded-lg">
-                        <Radar className="w-6 h-6 text-primary/20 mb-2 animate-pulse" />
-                        <p className="text-[8px] text-slate-500 uppercase font-bold tracking-widest text-center px-4">
-                          {isAnalyzing ? "Scanning market data..." : "Initialize AI scan for strategic investment briefing"}
+                      <div className="flex flex-col items-center justify-center py-6 border-2 border-dashed border-primary/10 rounded-xl bg-primary/[0.02]">
+                        <Radar className="w-8 h-8 text-primary/20 mb-3 animate-pulse" />
+                        <p className="text-[9px] text-slate-400 uppercase font-bold tracking-[0.15em] text-center px-4 max-w-[200px] leading-relaxed">
+                          Initialize AI scan for tactical investment briefing
                         </p>
                       </div>
                     )}
@@ -6649,7 +7306,7 @@ export default function App() {
                         />
                         <button 
                           onClick={() => fileInputRef.current?.click()}
-                          className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-2 bg-secondary/10 glass-hover text-secondary rounded-lg transition-colors border border-secondary/20"
+                          className="flex-1 sm:flex-none flex items-center justify-center gap-2 px-3 py-2 bg-secondary/10 glass-hover text-secondary rounded-lg transition-colors border border-secondary/20 whitespace-nowrap"
                           title={t.uploadDocumentation}
                         >
                           <Upload className="w-3.5 h-3.5" />
@@ -6868,7 +7525,7 @@ export default function App() {
             initial={{ x: -400, opacity: 0 }}
             animate={{ x: 0, opacity: 1 }}
             exit={{ x: -400, opacity: 0 }}
-            className="absolute left-0 sm:left-6 top-0 sm:top-56 bottom-0 sm:bottom-24 w-full sm:w-80 z-[60] flex flex-col gap-4 pointer-events-none p-4 sm:p-0"
+            className="absolute left-0 sm:left-6 top-4 sm:top-64 bottom-0 sm:bottom-24 w-full sm:w-80 z-[60] flex flex-col gap-4 pointer-events-none p-4 sm:p-0"
           >
             <div className="flex sm:hidden justify-between items-center mb-4 pointer-events-auto shrink-0 apple-glass-dark p-4 rounded-2xl">
               <div className="flex items-center gap-3">
@@ -6916,6 +7573,24 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      <Suspense fallback={
+        <div className="fixed inset-0 z-[500] flex items-center justify-center bg-black/60 backdrop-blur-xl">
+          <div className="flex flex-col items-center gap-6">
+            <div className="w-20 h-20 border-4 border-primary/20 border-t-primary rounded-full animate-spin shadow-[0_0_30px_rgba(var(--primary-accent),0.3)]" />
+            <div className="flex flex-col items-center gap-2">
+              <span className="text-xs font-mono font-bold text-primary uppercase tracking-[0.3em] animate-pulse">Initializing_Admin_Core</span>
+              <div className="w-48 h-1 bg-white/5 rounded-full overflow-hidden">
+                <motion.div animate={{ x: [-100, 100] }} transition={{ repeat: Infinity, duration: 1.5 }} className="w-20 h-full bg-primary/40" />
+              </div>
+            </div>
+          </div>
+        </div>
+      }>
+        {userRole === 'admin' && dashboardOpen && (
+          <AdminIntelligencePanel />
+        )}
+      </Suspense>
+
       <StrategicReportModal 
         isOpen={reportModalOpen}
         onClose={() => setReportModalOpen(false)}
@@ -6949,6 +7624,8 @@ export default function App() {
           setSelectedBuilding({ id: asset.id, properties: asset });
           soundService.playSonar();
         }}
+        isLoadingBuildings={isLoadingBuildings}
+        isLoadingAssets={isLoadingAssets}
       />
 
       <div className="absolute left-4 bottom-24 z-50 pointer-events-auto flex flex-col gap-1.5">
@@ -6967,8 +7644,8 @@ export default function App() {
       </div>
 
       {/* Numerical Map Controls */}
-      <div className="absolute right-4 top-1/2 -translate-y-1/2 z-50 pointer-events-auto flex flex-col gap-1.5">
-        <div className="apple-glass-dark border border-white/10 rounded-xl p-1.5 flex flex-col gap-1.5 shadow-2xl">
+      <div className="absolute right-4 top-1/2 -translate-y-1/2 z-50 pointer-events-auto">
+        <ButtonGroup variant="vertical" spacing={1.5} className="apple-glass-dark border border-white/10 rounded-xl p-1.5 shadow-2xl">
           <button 
             onClick={() => {
               setViewState(prev => ({ ...prev, zoom: Math.min(prev.zoom + 1, 20), transitionDuration: 300 }));
@@ -7029,7 +7706,7 @@ export default function App() {
           >
             <RotateCcw className="w-4 h-4" />
           </button>
-        </div>
+        </ButtonGroup>
       </div>
 
       {/* Map Legend */}
@@ -7246,37 +7923,186 @@ export default function App() {
                     <div className="flex items-center justify-between px-1">
                       <label className="text-[10px] uppercase font-bold text-slate-500 tracking-widest">{t.assetAddress}</label>
                     </div>
-                    <div className="flex gap-2">
+                  <div className="grid grid-cols-1 gap-2">
                        <input 
                          type="text"
                          value={newAsset.address}
                          onChange={(e) => setNewAsset(prev => ({ ...prev, address: e.target.value }))}
-                         className="flex-1 bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
-                         placeholder="Enter location address..."
+                         className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-sm text-white outline-none focus:border-primary/50 transition-colors"
+                         placeholder="Enter location address or cadastral #"
                        />
-                       <button 
-                         onClick={handleGeocode}
-                         disabled={isGeocoding || !newAsset.address}
-                         className={cn(
-                           "px-3 bg-secondary/10 hover:bg-secondary/20 border border-secondary/30 rounded-xl flex items-center justify-center text-secondary transition-all",
-                           isGeocoding && "animate-pulse"
-                         )}
-                         title="Convert Address to Coordinates"
-                       >
-                         {isGeocoding ? <RotateCcw className="w-4 h-4 animate-spin" /> : <MapPin className="w-4 h-4" />}
-                       </button>
-                       <button 
-                         onClick={handleSuggestAssetType}
-                         disabled={isSuggesting || !newAsset.address || newAsset.cost <= 0}
-                         className={cn(
-                           "px-4 bg-primary/10 hover:bg-primary/20 border border-primary/30 rounded-xl flex items-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-all whitespace-nowrap",
-                           isSuggesting ? "text-primary animate-pulse" : "text-primary disabled:opacity-30 disabled:grayscale"
-                         )}
-                       >
-                         <Sparkles className="w-3.5 h-3.5" />
-                         Analyze
-                       </button>
+                       <ButtonGroup variant="horizontal" spacing={2} className="w-full" align="stretch">
+                         <button 
+                           onClick={handleGeocode}
+                           disabled={isGeocoding || !newAsset.address}
+                           className={cn(
+                             "flex-1 bg-secondary/10 hover:bg-secondary/20 border border-secondary/30 rounded-xl flex items-center justify-center text-secondary transition-all min-h-[44px]",
+                             isGeocoding && "animate-pulse"
+                           )}
+                           title="Convert Address to Coordinates"
+                         >
+                           {isGeocoding ? (
+                             <div className="flex items-center gap-2">
+                               <RotateCcw className="w-4 h-4 animate-spin text-[10px]" />
+                               <span className="text-[8px] font-bold uppercase hidden sm:inline">Locating...</span>
+                             </div>
+                           ) : <MapPin className="w-4 h-4" />}
+                         </button>
+                         <button 
+                           onClick={handleVerifyCadastral}
+                           disabled={isVerifyingCadastral || !newAsset.address}
+                           className={cn(
+                             "flex-1 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded-xl flex items-center justify-center text-emerald-500 transition-all min-h-[44px]",
+                             isVerifyingCadastral && "animate-pulse"
+                           )}
+                           title="Verify via Real Estate Proxy"
+                         >
+                           {isVerifyingCadastral ? (
+                             <div className="flex items-center gap-2">
+                               <RotateCcw className="w-4 h-4 animate-spin text-[10px]" />
+                               <span className="text-[8px] font-bold uppercase hidden sm:inline">Verifying...</span>
+                             </div>
+                           ) : <ShieldCheck className="w-4 h-4" />}
+                         </button>
+                         <button 
+                           onClick={handleSuggestAssetType}
+                           disabled={isSuggesting || !newAsset.address || newAsset.cost <= 0}
+                           className={cn(
+                             "flex-[2] px-4 bg-primary/10 hover:bg-primary/20 border border-primary/30 rounded-xl flex items-center justify-center gap-2 text-[10px] font-bold uppercase tracking-widest transition-all whitespace-normal min-h-[44px]",
+                             isSuggesting ? "text-primary animate-pulse" : "text-primary disabled:opacity-30 disabled:grayscale"
+                           )}
+                         >
+                           {isSuggesting ? (
+                             <>
+                               <RotateCcw className="w-3.5 h-3.5 animate-spin" />
+                               <span className="xs:inline">Synthesizing...</span>
+                             </>
+                           ) : (
+                             <>
+                               <Sparkles className="w-3.5 h-3.5" />
+                               <span className="xs:inline">Analyze</span>
+                             </>
+                           )}
+                         </button>
+                       </ButtonGroup>
                     </div>
+
+                    <AnimatePresence>
+                      {isGeocoding && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="px-4 py-2 bg-secondary/5 border border-secondary/20 rounded-xl relative overflow-hidden"
+                        >
+                          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-secondary/5 to-transparent shimmer-anim" />
+                          <div className="flex items-center gap-3 relative z-10">
+                            <div className="w-1.5 h-1.5 bg-secondary rounded-full animate-ping" />
+                            <span className="text-[9px] font-mono text-secondary uppercase font-bold tracking-widest">Pinpointing Orbital Coordinates...</span>
+                          </div>
+                          <motion.div 
+                            animate={{ width: ["0%", "100%"] }}
+                            transition={{ duration: 2.5, ease: "linear", repeat: Infinity }}
+                            className="absolute bottom-0 left-0 h-0.5 bg-secondary/30"
+                          />
+                        </motion.div>
+                      )}
+
+                      {isVerifyingCadastral && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="px-4 py-2 bg-emerald-500/5 border border-emerald-500/20 rounded-xl relative overflow-hidden"
+                        >
+                          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-emerald-500/5 to-transparent shimmer-anim" />
+                          <div className="flex items-center gap-3 relative z-10">
+                            <Shield className="w-3 h-3 text-emerald-500 animate-pulse" />
+                            <span className="text-[9px] font-mono text-emerald-500 uppercase font-bold tracking-widest">Verifying Strategic Proxy...</span>
+                          </div>
+                          <motion.div 
+                            animate={{ x: ["-100%", "100%"] }}
+                            transition={{ duration: 1.5, ease: "easeInOut", repeat: Infinity }}
+                            className="absolute bottom-0 left-0 right-0 h-0.5 bg-emerald-500/20"
+                          />
+                        </motion.div>
+                      )}
+
+                      {isSuggesting && !suggestion && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="p-4 bg-primary/5 border border-primary/20 rounded-xl space-y-5 overflow-hidden"
+                        >
+                          <div className="flex items-center justify-between">
+                             <div className="flex items-center gap-2">
+                                <div className="w-1.5 h-1.5 bg-primary rounded-full animate-ping" />
+                                <span className="text-[9px] font-mono text-primary uppercase font-bold tracking-widest leading-none">Neural_Pattern_Synthesis</span>
+                             </div>
+                             <div className="flex gap-0.5">
+                                {[1,2,3,4].map(i => (
+                                  <motion.div 
+                                    key={i}
+                                    animate={{ opacity: [0.2, 1, 0.2] }}
+                                    transition={{ repeat: Infinity, duration: 1, delay: i * 0.2 }}
+                                    className="w-2 h-0.5 bg-primary/40"
+                                  />
+                                ))}
+                             </div>
+                          </div>
+                          
+                          <div className="grid grid-cols-2 gap-4">
+                            <div className="space-y-2">
+                              <Skeleton className="h-2 w-12" />
+                              <Skeleton className="h-8 w-full rounded-lg" />
+                            </div>
+                            <div className="space-y-2">
+                              <Skeleton className="h-2 w-16" />
+                              <Skeleton className="h-8 w-full rounded-lg" />
+                            </div>
+                          </div>
+                          
+                          <div className="space-y-2">
+                            <Skeleton className="h-2 w-24" />
+                            <Skeleton className="h-16 w-full rounded-lg" />
+                          </div>
+                          
+                          <div className="flex items-center gap-2 pt-1">
+                             <div className="flex-1 h-px bg-primary/10" />
+                             <span className="text-[7px] font-mono text-primary/40 uppercase tracking-[0.4em]">Processing_Data_Arrays</span>
+                             <div className="flex-1 h-px bg-primary/10" />
+                          </div>
+                        </motion.div>
+                      )}
+
+                      {cadastralData && !isVerifyingCadastral && (
+                        <motion.div 
+                          initial={{ opacity: 0, height: 0 }}
+                          animate={{ opacity: 1, height: 'auto' }}
+                          exit={{ opacity: 0, height: 0 }}
+                          className="p-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl space-y-1.5"
+                        >
+                           <div className="flex justify-between items-center">
+                              <span className="text-[9px] font-bold text-emerald-500 uppercase tracking-widest flex items-center gap-1.5">
+                                 <ShieldCheck className="w-3 h-3" />
+                                 Verified Cadastral Data
+                              </span>
+                              <span className="text-[8px] font-mono text-emerald-500/60">{cadastralData.cad_num}</span>
+                           </div>
+                           <div className="grid grid-cols-2 gap-4 pt-1">
+                              <div>
+                                 <p className="text-[7px] text-slate-500 uppercase font-bold">Category</p>
+                                 <p className="text-[10px] text-white font-mono">{cadastralData.category}</p>
+                              </div>
+                              <div>
+                                 <p className="text-[7px] text-slate-500 uppercase font-bold">Area</p>
+                                 <p className="text-[10px] text-white font-mono">{cadastralData.area} m²</p>
+                              </div>
+                           </div>
+                        </motion.div>
+                      )}
+                    </AnimatePresence>
                   </div>
 
                   {/* AI Suggestion Display */}
@@ -7417,10 +8243,17 @@ export default function App() {
                   )}
                 >
                   {isCreating ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                      {t.assetCreating}
-                    </>
+                    <div className="flex items-center gap-3">
+                      <div className="relative w-5 h-5 flex items-center justify-center">
+                        <motion.div 
+                          animate={{ rotate: 360 }} 
+                          transition={{ repeat: Infinity, duration: 2, ease: "linear" }} 
+                          className="absolute inset-0 border-b-2 border-white/40 rounded-full" 
+                        />
+                        <Database className="w-2.5 h-2.5 text-white animate-pulse" />
+                      </div>
+                      <span className="animate-pulse tracking-[0.25em]">{t.assetCreating}</span>
+                    </div>
                   ) : (
                     <>
                       <Target className="w-5 h-5" />
@@ -7638,7 +8471,7 @@ export default function App() {
                            key={amt}
                            onClick={() => handleContributeToSyndicate(activeSyndicate.id, amt)}
                            className={cn(
-                             "py-3.5 rounded-2xl text-[10px] font-display font-bold uppercase tracking-[0.2em] transition-all border shadow-lg",
+                             "py-3.5 rounded-2xl text-[10px] font-display font-bold uppercase tracking-[0.2em] transition-all border shadow-lg whitespace-nowrap",
                              balance >= amt ? "bg-secondary/10 border-secondary/30 text-secondary hover:bg-secondary/20 hover:border-secondary/50 active:scale-95 shadow-secondary/5" : "bg-slate-800/50 border-white/5 text-slate-600 cursor-not-allowed shadow-none"
                            )}
                          >
@@ -7658,7 +8491,83 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Global Notifications system */}
+      <div className="fixed top-24 right-6 z-[600] flex flex-col gap-3 max-w-sm w-full pointer-events-none">
+        <AnimatePresence>
+          {notifications.map((notification) => (
+            <motion.div
+              key={notification.id}
+              initial={{ opacity: 0, x: 50, scale: 0.9 }}
+              animate={{ opacity: 1, x: 0, scale: 1 }}
+              exit={{ opacity: 0, x: 20, scale: 0.95 }}
+              className={cn(
+                "pointer-events-auto apple-glass p-4 rounded-2xl border shadow-2xl relative overflow-hidden group",
+                notification.type === 'error' ? "border-red-500/40" : 
+                notification.type === 'success' ? "border-emerald-500/40" :
+                notification.type === 'warning' ? "border-amber-500/40" : "border-primary/40"
+              )}
+            >
+              <div className={cn(
+                "absolute top-0 left-0 w-1 h-full",
+                notification.type === 'error' ? "bg-red-500" : 
+                notification.type === 'success' ? "bg-emerald-500" :
+                notification.type === 'warning' ? "bg-amber-500" : "bg-primary"
+              )} />
+              
+              <div className="flex items-start gap-3">
+                <div className={cn(
+                  "w-8 h-8 rounded-xl flex items-center justify-center shrink-0",
+                  notification.type === 'error' ? "bg-red-500/10 text-red-500" : 
+                  notification.type === 'success' ? "bg-emerald-500/10 text-emerald-500" :
+                  notification.type === 'warning' ? "bg-amber-500/10 text-amber-500" : "bg-primary/10 text-primary"
+                )}>
+                  {notification.type === 'error' && <ShieldAlert className="w-4 h-4" />}
+                  {notification.type === 'success' && <ShieldCheck className="w-4 h-4" />}
+                  {notification.type === 'warning' && <AlertTriangle className="w-4 h-4" />}
+                  {notification.type === 'info' && <Info className="w-4 h-4" />}
+                </div>
+                
+                <div className="flex-1 min-w-0 pr-6">
+                  <h4 className={cn(
+                    "text-[10px] uppercase font-bold tracking-widest mb-1",
+                    notification.type === 'error' ? "text-red-400" : 
+                    notification.type === 'success' ? "text-emerald-400" :
+                    notification.type === 'warning' ? "text-amber-400" : "text-primary"
+                  )}>
+                    {notification.message}
+                  </h4>
+                  <p className="text-[11px] text-slate-300 leading-relaxed font-medium">
+                    {notification.details}
+                  </p>
+                </div>
+                
+                <button 
+                  onClick={() => clearNotification(notification.id)}
+                  className="absolute top-2 right-2 p-1.5 rounded-lg hover:bg-white/5 transition-colors text-slate-500 hover:text-slate-300"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              
+              {/* Progress bar for auto-dismiss */}
+              <motion.div 
+                initial={{ width: "100%" }}
+                animate={{ width: "0%" }}
+                transition={{ duration: notification.type === 'error' ? 10 : 6, ease: "linear" }}
+                className={cn(
+                  "absolute bottom-0 left-0 h-0.5 opacity-30",
+                  notification.type === 'error' ? "bg-red-500" : 
+                  notification.type === 'success' ? "bg-emerald-500" :
+                  notification.type === 'warning' ? "bg-amber-500" : "bg-primary"
+                )}
+              />
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </div>
     </div>
     </AppErrorBoundary>
+    </Profiler>
   );
 }

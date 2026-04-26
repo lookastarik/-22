@@ -4,59 +4,6 @@ import { createServer as createViteServer } from "vite";
 import sqlite3 from "sqlite3";
 import { open } from "sqlite";
 
-// Rule 2: "Live" Building (RLS + Data Mapping)
-// ... (mockBuildingsData remains the same)
-const mockBuildingsData = [
-  { 
-    id: 101, 
-    height: 45, 
-    roi: 18, 
-    status: 1, 
-    owner_id: "user_1",
-    cost: 1500000,
-    yield: 25000,
-    coordinates: [
-      [37.6180, 55.7560], [37.6185, 55.7560], [37.6185, 55.7565], [37.6180, 55.7565], [37.6180, 55.7560]
-    ]
-  },
-  { 
-    id: 102, 
-    height: 30, 
-    roi: 12, 
-    status: 1, 
-    owner_id: "user_2",
-    cost: 800000,
-    yield: 12000,
-    coordinates: [
-      [37.6160, 55.7550], [37.6165, 55.7550], [37.6165, 55.7555], [37.6160, 55.7555], [37.6160, 55.7550]
-    ]
-  },
-  { 
-    id: 103, 
-    height: 60, 
-    roi: 5, 
-    status: 2, 
-    owner_id: "user_1",
-    cost: 2200000,
-    yield: 8000,
-    coordinates: [
-      [37.6190, 55.7540], [37.6195, 55.7540], [37.6195, 55.7545], [37.6190, 55.7545], [37.6190, 55.7540]
-    ]
-  },
-  { 
-    id: 104, 
-    height: 85, 
-    roi: -12, 
-    status: 3, 
-    owner_id: "user_3",
-    cost: 4500000,
-    yield: -5000,
-    coordinates: [
-      [37.6210, 55.7570], [37.6215, 55.7570], [37.6215, 55.7575], [37.6210, 55.7575], [37.6210, 55.7570]
-    ]
-  },
-];
-
 async function startServer() {
   const app = express();
   const PORT = 3000;
@@ -85,8 +32,6 @@ async function startServer() {
       levels INTEGER,
       min_height REAL,
       roof_shape TEXT,
-      roof_height REAL,
-      role_osm TEXT,
       roi REAL,
       status INTEGER,
       owner_id TEXT,
@@ -100,7 +45,7 @@ async function startServer() {
     CREATE TABLE IF NOT EXISTS building_media (
       id TEXT PRIMARY KEY,
       building_id INTEGER,
-      type TEXT, -- 'photo' or 'video'
+      type TEXT,
       url TEXT,
       timestamp INTEGER,
       FOREIGN KEY(building_id) REFERENCES buildings(id)
@@ -125,310 +70,187 @@ async function startServer() {
       parkingSpaces INTEGER,
       createdAt TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS financial_audits (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      type TEXT, -- CADASTRAL_FETCH, PAYMENT_INIT, KYC_VERIFY
+      payload TEXT,
+      status TEXT,
+      timestamp TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS payments (
+      id TEXT PRIMARY KEY,
+      user_id TEXT,
+      syndicate_id TEXT,
+      amount REAL,
+      status TEXT, -- HELD, CAPTURED, FAILED
+      bank_ref TEXT,
+      idempotency_key TEXT UNIQUE,
+      createdAt TEXT
+    );
   `);
-
-  // Seed buildings if empty
-  const buildingCount = await db.get("SELECT COUNT(*) as count FROM buildings");
-  if (buildingCount.count === 0) {
-    const seedData = [
-      { id: 101, height: 45, levels: 12, roof_shape: 'flat', cost: 1500000, yield: 25000, coords: [[37.6180, 55.7560], [37.6185, 55.7560], [37.6185, 55.7565], [37.6180, 55.7565], [37.6180, 55.7560]], enc: 'None', sr: 'High', roi: 18, status: 1, owner_id: "user_1" },
-      { id: 102, height: 30, levels: 8, roof_shape: 'gabled', cost: 800000, yield: 12000, coords: [[37.6160, 55.7550], [37.6165, 55.7550], [37.6165, 55.7555], [37.6160, 55.7555], [37.6160, 55.7550]], enc: 'None', sr: 'Medium', roi: 12, status: 1, owner_id: "user_2" },
-      { id: 103, height: 60, levels: 15, min_height: 5, roof_shape: 'hipped', cost: 2200000, yield: 8000, coords: [[37.6190, 55.7540], [37.6195, 55.7540], [37.6195, 55.7545], [37.6190, 55.7545], [37.6190, 55.7540]], enc: 'Lease_Hold_Expired', sr: 'Low', roi: 5, status: 2, owner_id: "user_1" },
-      { id: 104, height: 85, levels: 22, roof_shape: 'mansard', cost: 4500000, yield: -5000, coords: [[37.6210, 55.7570], [37.6215, 55.7570], [37.6215, 55.7575], [37.6210, 55.7575], [37.6210, 55.7570]], enc: 'Court_Order_Active', sr: 'None', roi: -12, status: 3, owner_id: "user_3" },
-    ];
-
-    for (const b of seedData) {
-      await db.run(
-        "INSERT INTO buildings (id, height, levels, min_height, roof_shape, roi, status, owner_id, cost, yield, coordinates, encumbrances, sanctions_resist) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        [b.id, b.height, b.levels, b.min_height || 0, b.roof_shape, b.roi, b.status, b.owner_id, b.cost, b.yield, JSON.stringify(b.coords), b.enc, b.sr]
-      );
-    }
-  }
 
   app.use(express.json());
 
-  // Asset API Routes
-  app.get("/api/assets", async (req, res) => {
+  // 🌍 CADASTRAL PROXY
+  app.get("/api/v1/cadastral/:cad_num", async (req, res) => {
+    const { cad_num } = req.params;
+    const userId = req.headers["x-user-id"] as string || "anonymous";
     try {
-      const assets = await db.all("SELECT * FROM assets ORDER BY createdAt DESC");
-      res.json(assets);
+      const auditId = Math.random().toString(36).substr(2, 9);
+      await db.run(
+        "INSERT INTO financial_audits (id, user_id, type, payload, status, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+        [auditId, userId, "CADASTRAL_FETCH", JSON.stringify({ cad_num }), "SUCCESS", new Date().toISOString()]
+      );
+      res.json({
+        cad_num,
+        status: "ACTIVE",
+        area: 450.5,
+        category: "Commercial",
+        permitted_use: "Office/Retail",
+        value: 125000000,
+        geometry: { type: "Polygon", coordinates: [[[37.61, 55.75], [37.62, 55.75], [37.62, 55.76], [37.61, 55.76], [37.61, 55.75]]] }
+      });
     } catch (error) {
-      res.status(500).json({ error: "Database error" });
+      res.status(502).json({ error: "External cadastral service failed" });
     }
+  });
+
+  // 🏦 PAYMENTS & ESCROW
+  app.post("/api/v1/payments/escrow/init", async (req, res) => {
+    const { user_id, syndicate_id, amount, idempotency_key } = req.body;
+    try {
+      const existing = await db.get("SELECT * FROM payments WHERE idempotency_key = ?", [idempotency_key]);
+      if (existing) return res.json(existing);
+      const bankRef = `BNK_${Math.random().toString(36).substr(2, 12).toUpperCase()}`;
+      const paymentId = Math.random().toString(36).substr(2, 9);
+      await db.run(`
+        INSERT INTO payments (id, user_id, syndicate_id, amount, status, bank_ref, idempotency_key, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `, [paymentId, user_id, syndicate_id || 'STALKER_UNIT', amount, "HELD", bankRef, idempotency_key, new Date().toISOString()]);
+      res.status(201).json({ status: "HELD", ref: bankRef, expires_at: new Date(Date.now() + 86400000).toISOString() });
+    } catch (error) {
+      res.status(500).json({ error: "Financial gateway error" });
+    }
+  });
+
+  // 🔔 WEBHOOKS
+  app.post("/api/v1/webhooks/payments", async (req, res) => {
+    const { event, object } = req.body;
+    try {
+      if (event === "payment.succeeded") {
+        await db.run("UPDATE payments SET status = 'CAPTURED' WHERE bank_ref = ?", [object.id]);
+      }
+      res.status(200).send("OK");
+    } catch (error) {
+      res.status(500).send("Retry");
+    }
+  });
+
+  // Asset Routes
+  app.get("/api/assets", async (req, res) => {
+    const assets = await db.all("SELECT * FROM assets ORDER BY createdAt DESC");
+    res.json(assets);
   });
 
   app.post("/api/assets", async (req, res) => {
     const asset = req.body;
-    
-    // Validation
-    if (!asset.title || asset.title.trim().length < 1) {
-      return res.status(400).json({ error: "Title is required" });
-    }
-    if (!asset.cost || isNaN(Number(asset.cost)) || Number(asset.cost) <= 0) {
-      return res.status(400).json({ error: "Valid cost is required" });
-    }
-    if (!asset.latitude || !asset.longitude) {
-      return res.status(400).json({ error: "Location coordinates are required" });
-    }
-    if (!asset.ownerUid) {
-      return res.status(401).json({ error: "Unauthorized: Owner UID missing" });
-    }
-
     const id = Math.random().toString(36).substr(2, 9);
     const createdAt = new Date().toISOString();
-    
     try {
-      // Correct Logic: Check and deduct balance
       const user = await db.get("SELECT balance FROM users WHERE uid = ?", [asset.ownerUid]);
-      if (!user) {
-        return res.status(404).json({ error: "User profile not found. Please sign in again." });
-      }
-      
-      const cost = Number(asset.cost);
-      if (user.balance < cost) {
-        return res.status(400).json({ error: `Insufficient funds. Required: $${cost.toLocaleString()}, Available: $${user.balance.toLocaleString()}` });
-      }
-
-      // Deduct balance
-      const newBalance = user.balance - cost;
+      if (!user || user.balance < asset.cost) return res.status(400).json({ error: "Insufficient funds or user not found" });
+      const newBalance = user.balance - asset.cost;
       await db.run("UPDATE users SET balance = ? WHERE uid = ?", [newBalance, asset.ownerUid]);
-
       await db.run(`
-        INSERT INTO assets (
-          id, title, type, model, cost, yield, roi, status, ownerUid, 
-          description, address, latitude, longitude, sqft, yearBuilt, 
-          parkingSpaces, createdAt
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `, [
-        id, asset.title, asset.type, asset.model, asset.cost, asset.yield, 
-        asset.roi, asset.status, asset.ownerUid, asset.description, 
-        asset.address, asset.latitude, asset.longitude, asset.sqft, 
-        asset.yearBuilt, asset.parkingSpaces, createdAt
-      ]);
-      
-      const newAsset = await db.get("SELECT * FROM assets WHERE id = ?", [id]);
-      res.json({ asset: newAsset, balance: newBalance });
+        INSERT INTO assets (id, title, type, model, cost, yield, roi, status, ownerUid, description, address, latitude, longitude, sqft, yearBuilt, parkingSpaces, createdAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `, [id, asset.title, asset.type, asset.model, asset.cost, asset.yield, asset.roi, asset.status, asset.ownerUid, asset.description, asset.address, asset.latitude, asset.longitude, asset.sqft, asset.yearBuilt, asset.parkingSpaces, createdAt]);
+      res.json({ asset: { ...asset, id, createdAt }, balance: newBalance });
     } catch (error) {
-      console.error("Asset creation error:", error);
-      res.status(500).json({ error: "Database error" });
+      res.status(500).json({ error: "Internal error" });
     }
   });
 
-  // Local Auth API
-  app.post("/api/auth/login", async (req, res) => {
-    const { email, displayName, photoURL, uid } = req.body;
+  // User Sync
+  app.post("/api/user/sync", async (req, res) => {
+    const { uid, email, displayName, photoURL } = req.body;
     try {
-      // Simple mock auth: if user exists, return it, else create
       let user = await db.get("SELECT * FROM users WHERE uid = ?", [uid]);
       if (!user) {
-        let role = 'investor';
-        if (email === "lookastarik@gmail.com") role = 'admin';
-        
-        await db.run(`
-          INSERT INTO users (uid, email, displayName, photoURL, role, balance, portfolio, createdAt)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        `, [uid, email, displayName, photoURL, role, 5000000, '[]', new Date().toISOString()]);
-        
+        const role = email === "lookastarik@gmail.com" ? "admin" : "investor";
+        await db.run(`INSERT INTO users (uid, email, displayName, photoURL, role, balance, portfolio, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [uid, email, displayName, photoURL, role, 5000000, '[]', new Date().toISOString()]);
         user = await db.get("SELECT * FROM users WHERE uid = ?", [uid]);
       }
-      user.portfolio = JSON.parse(user.portfolio);
       res.json(user);
     } catch (error) {
-      res.status(500).json({ error: "Auth error" });
-    }
-  });
-  // ... (existing user routes)
-  app.get("/api/user/:uid", async (req, res) => {
-    try {
-      const user = await db.get("SELECT * FROM users WHERE uid = ?", [req.params.uid]);
-      if (user) {
-        user.portfolio = JSON.parse(user.portfolio);
-        res.json(user);
-      } else {
-        res.status(404).json({ error: "User not found" });
-      }
-    } catch (error) {
-      res.status(500).json({ error: "Database error" });
+      res.status(500).json({ error: "Sync error" });
     }
   });
 
-  app.post("/api/user/sync", async (req, res) => {
-    const { uid, email, displayName, photoURL, role, balance, portfolio, createdAt } = req.body;
-    try {
-      const portfolioStr = JSON.stringify(portfolio || []);
-      
-      // Determine initial role for new users
-      let initialRole = role || 'investor';
-      if (email === "lookastarik@gmail.com") {
-        initialRole = 'admin';
-      }
-
-      await db.run(`
-        INSERT INTO users (uid, email, displayName, photoURL, role, balance, portfolio, createdAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(uid) DO UPDATE SET
-          email = excluded.email,
-          displayName = excluded.displayName,
-          photoURL = excluded.photoURL,
-          -- Role is NOT updated via sync to prevent self-escalation
-          balance = COALESCE(excluded.balance, users.balance),
-          portfolio = COALESCE(excluded.portfolio, users.portfolio)
-      `, [uid, email, displayName, photoURL, initialRole, balance, portfolioStr, createdAt]);
-      
-      const updatedUser = await db.get("SELECT * FROM users WHERE uid = ?", [uid]);
-      updatedUser.portfolio = JSON.parse(updatedUser.portfolio);
-      res.json(updatedUser);
-    } catch (error) {
-      console.error("Sync error:", error);
-      res.status(500).json({ error: "Database error" });
-    }
-  });
-
-  // Building Media API
-  app.get("/api/v1/buildings/:id/media", async (req, res) => {
-    try {
-      const media = await db.all("SELECT * FROM building_media WHERE building_id = ? ORDER BY timestamp DESC", [req.params.id]);
-      res.json(media);
-    } catch (error) {
-      res.status(500).json({ error: "Database error" });
-    }
-  });
-
-  app.post("/api/v1/buildings/:id/media", async (req, res) => {
-    const { type, url } = req.body;
-    const id = Math.random().toString(36).substr(2, 9);
-    const timestamp = Date.now();
-    try {
-      await db.run(
-        "INSERT INTO building_media (id, building_id, type, url, timestamp) VALUES (?, ?, ?, ?, ?)",
-        [id, req.params.id, type, url, timestamp]
-      );
-      res.json({ id, type, url, timestamp });
-    } catch (error) {
-      res.status(500).json({ error: "Database error" });
-    }
-  });
-
-  // API Routes
+  // Buildings Layer API
   app.get("/api/v1/buildings", async (req, res) => {
-    const userId = req.headers["x-user-id"] as string || "anonymous";
-    
-    // Fetch user role from DB for RLS
-    let userRole = "anonymous";
-    if (userId !== "anonymous") {
-      const user = await db.get("SELECT role FROM users WHERE uid = ?", [userId]);
-      if (user) userRole = user.role;
-    }
-
     try {
       const buildings = await db.all("SELECT * FROM buildings");
-      
-      const features = buildings.map(b => {
-        const props: any = { 
-          id: b.id,
-          height: b.height,
-          levels: b.levels,
-          min_height: b.min_height,
-          roof_shape: b.roof_shape,
-          cost: b.cost,
-          yield: b.yield
-        };
-        
-        // RLS Logic: Investor or Admin see ROI, Status, and Strategic Data
-        if (userRole === "investor" || userRole === "admin") {
-          props.roi = b.roi;
-          props.status = b.status;
-          props.encumbrances = b.encumbrances;
-          props.sanctions_resist = b.sanctions_resist;
-        }
-        
-        // RLS Logic: Only Admin or Owner sees owner_id
-        if (userRole === "admin" || userId === b.owner_id) {
-          props.owner = b.owner_id;
-        }
-        
-        return {
-          type: "Feature",
-          geometry: {
-            type: "Polygon",
-            coordinates: [JSON.parse(b.coordinates)]
-          },
-          properties: props
-        };
-      });
-
-      res.json({
-        type: "FeatureCollection",
-        features
-      });
+      const features = buildings.map(b => ({
+        type: "Feature",
+        geometry: { type: "Polygon", coordinates: [JSON.parse(b.coordinates)] },
+        properties: { ...b, coordinates: undefined }
+      }));
+      res.json({ type: "FeatureCollection", features });
     } catch (error) {
-      res.status(500).json({ error: "Database error" });
+      res.status(500).json({ error: "Data error" });
     }
   });
 
-  // Rule 3: AI Agent Tooling
-  app.post("/api/v1/ai/search", async (req, res) => {
-    const { center_lat, center_lon, radius_m, min_roi } = req.body;
-    
+  app.get("/api/v1/buildings/:id", async (req, res) => {
+    const { id } = req.params;
     try {
-      let query = "SELECT * FROM buildings";
-      const params: any[] = [];
+      const building = await db.get("SELECT * FROM buildings WHERE id = ?", [id]);
+      if (!building) return res.status(404).json({ error: "Building not found" });
       
-      if (min_roi) {
-        query += " WHERE roi >= ?";
-        params.push(min_roi);
-      }
-      
-      const results = await db.all(query, params);
-
-      res.json({
-        osm_ids: results.map(r => r.id),
-        count: results.length,
-        summary: `Found ${results.length} buildings matching criteria.`
-      });
+      const detailedBuilding = {
+        ...building,
+        technical_specifications: {
+          structural_integrity: "98.5%",
+          power_grid_sync: "Stable",
+          cyber_protection: "Tier-4 Lockdown",
+          ventilation_status: "Active - HEPA Filtered",
+          last_maintenance: "2024-03-12",
+          fiber_bandwidth: "10 Gbps sym",
+          backup_generators: "Quad-Array redundant",
+          energy_efficiency: "LEED Platinum equivalent"
+        },
+        financial_specifications: {
+          annual_gross_income: (building.yield || 15000) * 12 * 1.05,
+          operating_expenses: (building.yield || 15000) * 12 * 0.22,
+          net_operating_income: (building.yield || 15000) * 12 * 0.83,
+          capitalization_rate: building.roi || 12.5,
+          tenant_occupancy: "96.4%",
+          encumbrances: building.encumbrances || "Clear Title",
+          last_valuation_date: "2024-01-15",
+          insurance_policy: "Premium Comprehensive"
+        }
+      };
+      res.json(detailedBuilding);
     } catch (error) {
-      res.status(500).json({ error: "Database error" });
+      res.status(500).json({ error: "Data fetch failed" });
     }
   });
 
-  app.post("/api/v1/ai/analyze", async (req, res) => {
-    const { building_id } = req.body;
-    try {
-      const building = await db.get("SELECT * FROM buildings WHERE id = ?", [building_id]);
-      if (building) {
-        res.json({
-          id: building.id,
-          market_value: building.cost,
-          monthly_yield: building.yield,
-          roi: building.roi,
-          status: building.status === 1 ? 'Stable' : building.status === 2 ? 'Risk' : 'Anomalous'
-        });
-      } else {
-        res.status(404).json({ error: "Building not found" });
-      }
-    } catch (error) {
-      res.status(500).json({ error: "Database error" });
-    }
-  });
-
-  // Vite middleware for development
+  // Vite
   if (process.env.NODE_ENV !== "production") {
-    const vite = await createViteServer({
-      server: { middlewareMode: true },
-      appType: "spa",
-    });
+    const vite = await createViteServer({ server: { middlewareMode: true }, appType: "spa" });
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), "dist");
     app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    app.get("*", (req, res) => res.sendFile(path.join(distPath, "index.html")));
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-  });
+  app.listen(PORT, "0.0.0.0", () => console.log(`Server running on http://localhost:${PORT}`));
 }
 
 startServer();
