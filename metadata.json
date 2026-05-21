@@ -1,5 +1,5 @@
 {
-  "name": "Yard Invest Geo-Platform",
+  "name": "YardSoft Geo-Platform",
   "description": "High-performance real estate analysis platform with 3D mapping, RLS-protected data, and AI-driven insights.",
   "requestFramePermissions": ["camera", "microphone"]
 }

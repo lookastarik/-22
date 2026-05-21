@@ -17,23 +17,10 @@ export default defineConfig(({mode}) => {
     },
     build: {
       target: 'esnext',
-      rollupOptions: {
-        output: {
-          manualChunks: {
-            'deck-gl': ['@deck.gl/core', '@deck.gl/layers', '@deck.gl/geo-layers', '@deck.gl/mapbox', '@deck.gl/react'],
-            'map-layers': ['maplibre-gl', 'react-map-gl/maplibre'],
-            'charts': ['recharts'],
-            'utils': ['jspdf', 'xlsx', 'html-to-image', 'axios', 'file-saver'],
-            'ai': ['@google/genai']
-          }
-        }
-      }
     },
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),
-        'react': path.resolve(__dirname, 'node_modules/react'),
-        'react-dom': path.resolve(__dirname, 'node_modules/react-dom'),
       },
     },
     server: {
