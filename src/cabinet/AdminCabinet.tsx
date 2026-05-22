@@ -13,6 +13,10 @@ interface AdminCabinetProps {
   totalUsers?: number;
   activeSessions?: number;
   systemLoad?: number;
+  buildings?: any[];
+  onTriggerDrawMode?: () => void;
+  onTriggerCreateAsset?: () => void;
+  onTriggerBulkImport?: () => void;
 }
 
 export const AdminCabinet = ({ 
@@ -20,7 +24,11 @@ export const AdminCabinet = ({
   onClose, 
   totalUsers = 3840, 
   activeSessions = 142, 
-  systemLoad = 67 
+  systemLoad = 67,
+  buildings = [],
+  onTriggerDrawMode,
+  onTriggerCreateAsset,
+  onTriggerBulkImport
 }: AdminCabinetProps) => {
   const [activeModule, setActiveModule] = useState<'health' | 'users' | 'assets' | 'logs' | 'keys' | 'config'>('health');
 
@@ -197,8 +205,8 @@ export const AdminCabinet = ({
                       { id: 'user_882', email: 'investor@example.com', role: 'investor', kyc: 'VERIFIED' },
                       { id: 'user_445', email: 'demo@example.com', role: 'demo', kyc: 'PENDING' },
                       { id: 'admin_01', email: 'admin@yardsoft.ru', role: 'admin', kyc: 'VERIFIED' }
-                    ].map((user, i) => (
-                      <tr key={i} className="hover:bg-white/5 transition-colors">
+                    ].map((user) => (
+                      <tr key={user.id} className="hover:bg-white/5 transition-colors">
                         <td className="p-4 text-[10px] text-white font-mono">{user.id}</td>
                         <td className="p-4 text-[10px] text-slate-400">{user.email}</td>
                         <td className="p-4">
@@ -278,6 +286,105 @@ export const AdminCabinet = ({
                 <button className="w-full py-3 border border-dashed border-primary/30 rounded text-[9px] text-primary uppercase font-bold hover:bg-primary/5 transition-all">
                   + Generate New API Key
                 </button>
+              </div>
+            </div>
+          )}
+
+          {activeModule === 'assets' && (
+            <div className="space-y-6 animate-fadeIn">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white uppercase tracking-widest flex items-center gap-2">
+                    <Database className="w-4 h-4 text-red-500 animate-pulse" />
+                    Asset Registry // Palantir Foundry
+                  </h3>
+                  <p className="text-[9px] text-slate-500 uppercase font-bold tracking-widest mt-1">
+                    Centralized Real Estate Asset Control Panel
+                  </p>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      onClose();
+                      onTriggerDrawMode?.();
+                    }}
+                    className="px-4 py-2 border border-red-500/30 bg-red-500/10 text-red-400 text-[9px] font-bold uppercase tracking-widest rounded-lg hover:bg-red-500/25 transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    ✦ Draw Contour
+                  </button>
+                  <button
+                    onClick={onTriggerCreateAsset}
+                    className="px-4 py-2 bg-red-400 text-black text-[9px] font-bold uppercase tracking-widest rounded-lg hover:bg-red-300 transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    + Forge Asset
+                  </button>
+                  <button
+                    onClick={onTriggerBulkImport}
+                    className="px-4 py-2 border border-white/10 bg-white/5 text-slate-300 text-[9px] font-bold uppercase tracking-widest rounded-lg hover:bg-white/10 transition-all cursor-pointer flex items-center gap-1.5"
+                  >
+                    📦 Bulk Import
+                  </button>
+                </div>
+              </div>
+
+              {/* Stats Bar */}
+              <div className="grid grid-cols-3 gap-4">
+                <div className="p-4 bg-white/5 border border-white/10 rounded-2xl">
+                  <p className="text-[8px] text-slate-500 uppercase tracking-widest font-bold mb-1.5">Total Assets Registered</p>
+                  <p className="text-xl font-bold text-white">{(buildings || []).length} Objects</p>
+                </div>
+                <div className="p-4 bg-white/5 border border-white/10 rounded-2xl">
+                  <p className="text-[8px] text-slate-500 uppercase tracking-widest font-bold mb-1.5">Book Capitalization</p>
+                  <p className="text-xl font-bold text-red-400">
+                    ₽{((buildings || []).reduce((sum, b) => sum + (b.properties?.cost || 0), 0)).toLocaleString()}
+                  </p>
+                </div>
+                <div className="p-4 bg-white/5 border border-white/10 rounded-2xl">
+                  <p className="text-[8px] text-slate-500 uppercase tracking-widest font-bold mb-1.5">Forecast Recurring Yield</p>
+                  <p className="text-xl font-bold text-emerald-400">
+                    ₽{((buildings || []).reduce((sum, b) => sum + (b.properties?.yield || 0), 0)).toLocaleString()}/мес
+                  </p>
+                </div>
+              </div>
+
+              {/* Table List of Buildings */}
+              <div className="bg-white/5 border border-white/10 rounded-2xl overflow-hidden shadow-2xl">
+                <div className="max-h-80 overflow-y-auto">
+                  <table className="w-full text-left border-collapse text-[10px]">
+                    <thead className="bg-[#000000]/80 border-b border-white/10 sticky top-0">
+                      <tr>
+                        <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest font-bold">ID</th>
+                        <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest font-bold">Cost (Cap)</th>
+                        <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest font-bold">Gross Yield</th>
+                        <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest font-bold">ROI Factor</th>
+                        <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest font-bold">Height</th>
+                        <th className="p-4 text-[8px] text-slate-500 uppercase tracking-widest font-bold">Owner ID</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5 text-slate-300">
+                      {(buildings || []).map((b, i) => {
+                        const p = b.properties || {};
+                        return (
+                          <tr key={`asset_${p.id || i}`} className="hover:bg-white/5 transition-colors font-mono font-bold">
+                            <td className="p-4 font-mono font-bold text-white">ASSET_{p.id}</td>
+                            <td className="p-4 text-red-400 font-bold">₽{p.cost?.toLocaleString() || 'N/A'}</td>
+                            <td className="p-4 text-emerald-400 font-bold">₽{p.yield?.toLocaleString() || 'N/A'}/мес</td>
+                            <td className="p-4"><span className="px-2 py-0.5 rounded bg-amber-500/10 border border-amber-500/30 text-amber-400 font-bold">{p.roi || '10'}%</span></td>
+                            <td className="p-4 font-mono text-slate-400">{p.height}m</td>
+                            <td className="p-4 truncate max-w-[120px] font-mono text-slate-500">{p.owner || 'System Reserve'}</td>
+                          </tr>
+                        );
+                      })}
+                      {(buildings || []).length === 0 && (
+                        <tr>
+                          <td colSpan={6} className="p-12 text-center text-slate-500 uppercase tracking-widest text-[9px] font-bold">
+                            No registry items located. Run "Forge" to ingest.
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </div>
           )}

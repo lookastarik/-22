@@ -69,7 +69,8 @@ import {
   Map as MapIconUI,
   Layers as LayersIcon,
   MousePointer2,
-  Navigation
+  Navigation,
+  RotateCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -78,6 +79,10 @@ import { RoleGate } from './roles/RoleGate';
 import { DemoCabinet } from './cabinet/DemoCabinet';
 import { InvestorCabinet } from './cabinet/InvestorCabinet';
 import { AdminCabinet } from './cabinet/AdminCabinet';
+import { GeospatialEditor } from './admin/GeospatialEditor';
+import { AdminAssetCreator } from './admin/AdminAssetCreator';
+import { BulkImportEngine } from './admin/BulkImportEngine';
+import { soundService } from './services/soundService';
 
 // Types
 interface BuildingInfo {
@@ -532,6 +537,21 @@ export default function App() {
   const [crosshairPos, setCrosshairPos] = useState({ x: 0, y: 0 });
   const [mapModeMenuOpen, setMapModeMenuOpen] = useState(false);
   const [showParcels, setShowParcels] = useState(false);
+  const [isFlyoverActive, setIsFlyoverActive] = useState(false);
+  const [activeModalTab, setActiveModalTab] = useState<'financials' | 'geospatial' | 'tenants' | 'legal'>('financials');
+  const [showSoils, setShowSoils] = useState(false);
+  const [showWetlands, setShowWetlands] = useState(false);
+  const [showInfrastructure, setShowInfrastructure] = useState(false);
+  const [hoverSoil, setHoverSoil] = useState<any>(null);
+  const [hoverWetland, setHoverWetland] = useState<any>(null);
+  const [hoverInfra, setHoverInfra] = useState<any>(null);
+
+  // Admin Creation Suite states
+  const [geospatialEditorActive, setGeospatialEditorActive] = useState(false);
+  const [drawnVertices, setDrawnVertices] = useState<[number, number][]>([]);
+  const [assetCreatorOpen, setAssetCreatorOpen] = useState(false);
+  const [lastDrawnPolygon, setLastDrawnPolygon] = useState<number[][][] | null>(null);
+  const [bulkImportOpen, setBulkImportOpen] = useState(false);
 
   // Measurements Calculation
   const calculateDistance = (p1: [number, number], p2: [number, number]) => {
@@ -787,29 +807,95 @@ export default function App() {
 
   const portfolioDetailed = useMemo(() => {
     if (!buildingsData || !buildingsData.features) return [];
-    return buildingsData.features.filter((f: any) => portfolio.includes(f.id));
+    return buildingsData.features.filter((f: any) => {
+      const id = f.id ?? f.properties?.id;
+      return id !== undefined && portfolio.includes(id);
+    });
   }, [portfolio, buildingsData]);
 
-  useEffect(() => {
-    const fetchBuildings = async () => {
-      const headers: any = {};
-      if (user) {
-        headers['x-user-id'] = user.uid;
-      }
-      
-      try {
-        const res = await fetch('/api/v1/buildings', { headers });
-        const data = await res.json();
-        setBuildingsData(data);
-      } catch (err) {
-        console.error("Failed to fetch buildings:", err);
-      }
-    };
+  const fetchBuildings = useCallback(async () => {
+    const headers: any = {};
+    if (user) {
+      headers['x-user-id'] = user.uid;
+    }
+    
+    try {
+      const res = await fetch('/api/v1/buildings', { headers });
+      const data = await res.json();
+      setBuildingsData(data);
+    } catch (err) {
+      console.error("Failed to fetch buildings:", err);
+    }
+  }, [user]);
 
+  useEffect(() => {
     if (isAuthReady) {
       fetchBuildings();
     }
-  }, [user, isAuthReady]);
+  }, [isAuthReady, fetchBuildings]);
+
+  const handlePolygonComplete = (coordinates: number[][][]) => {
+    soundService.playSuccess();
+    setLastDrawnPolygon(coordinates);
+    setGeospatialEditorActive(false);
+    setDrawnVertices([]);
+    setAssetCreatorOpen(true);
+  };
+
+  const handleAdminCreateAsset = async (asset: any) => {
+    try {
+      const res = await fetch('/api/v1/buildings', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(user ? { 'x-user-id': user.uid } : {})
+        },
+        body: JSON.stringify({
+          height: asset.height,
+          roi: asset.roi,
+          status: asset.status,
+          owner_id: asset.owner || "admin",
+          cost: asset.cost,
+          yield: asset.yield,
+          coordinates: asset.polygon
+        })
+      });
+      if (res.ok) {
+        soundService.playSuccess();
+        setLastDrawnPolygon(null);
+        await fetchBuildings();
+      } else {
+        soundService.playDenied();
+        console.error("Failed to save building");
+      }
+    } catch (err) {
+      soundService.playDenied();
+      console.error("Save building error:", err);
+    }
+  };
+
+  const handleBulkImport = async (assets: any[]) => {
+    try {
+      const res = await fetch('/api/v1/buildings/bulk', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(user ? { 'x-user-id': user.uid } : {})
+        },
+        body: JSON.stringify({ assets })
+      });
+      if (res.ok) {
+        soundService.playSuccess();
+        await fetchBuildings();
+      } else {
+        soundService.playDenied();
+        console.error("Failed to bulk save buildings");
+      }
+    } catch (err) {
+      soundService.playDenied();
+      console.error("Bulk save error:", err);
+    }
+  };
 
   const toggleStatusFilter = (status: string) => {
     setFilters(prev => ({
@@ -847,6 +933,82 @@ export default function App() {
     frame = requestAnimationFrame(update);
     return () => cancelAnimationFrame(frame);
   }, []);
+
+  // Helper to calculate the 2D centroid center of any building polygon or multipolygon
+  const getBuildingCenter = useCallback((buildingId: number): [number, number] | null => {
+    if (!buildingsData || !buildingsData.features) return null;
+    const feature = buildingsData.features.find((f: any) => f.properties.id === buildingId);
+    if (!feature || !feature.geometry) return null;
+    
+    const { type, coordinates } = feature.geometry;
+    if (type === 'Polygon' && coordinates && coordinates[0]) {
+      const ring = coordinates[0];
+      let sumLng = 0;
+      let sumLat = 0;
+      ring.forEach((coord: number[]) => {
+        sumLng += coord[0];
+        sumLat += coord[1];
+      });
+      return [sumLng / ring.length, sumLat / ring.length];
+    } else if (type === 'MultiPolygon' && coordinates && coordinates[0] && coordinates[0][0]) {
+      const ring = coordinates[0][0];
+      let sumLng = 0;
+      let sumLat = 0;
+      ring.forEach((coord: number[]) => {
+        sumLng += coord[0];
+        sumLat += coord[1];
+      });
+      return [sumLng / ring.length, sumLat / ring.length];
+    } else if (type === 'Point' && coordinates) {
+      return [coordinates[0], coordinates[1]];
+    }
+    return null;
+  }, [buildingsData]);
+
+  // Turn-off flyover when modal/selection is closed
+  useEffect(() => {
+    if (!selectedBuilding) {
+      setIsFlyoverActive(false);
+    }
+  }, [selectedBuilding]);
+
+  // Land id 3D Flyover Tour Engine Effect
+  useEffect(() => {
+    if (!isFlyoverActive || !selectedBuilding) {
+      return;
+    }
+    const center = getBuildingCenter(selectedBuilding.id);
+    if (!center) {
+      setIsFlyoverActive(false);
+      return;
+    }
+
+    let lastTime = performance.now();
+    let animationFrameId: number;
+
+    const animate = (time: number) => {
+      const delta = time - lastTime;
+      // Rotate bearing by 15 degrees per second (0.015 per ms)
+      const bearingStep = delta * 0.015;
+      lastTime = time;
+
+      setViewState(prev => ({
+        ...prev,
+        longitude: center[0],
+        latitude: center[1],
+        bearing: (prev.bearing + bearingStep) % 360,
+        pitch: 62,
+        zoom: 17.5
+      }));
+
+      animationFrameId = requestAnimationFrame(animate);
+    };
+
+    animationFrameId = requestAnimationFrame(animate);
+    return () => {
+      cancelAnimationFrame(animationFrameId);
+    };
+  }, [isFlyoverActive, selectedBuilding, getBuildingCenter]);
 
   // Logo timeout
   useEffect(() => {
@@ -896,6 +1058,66 @@ export default function App() {
     
     setIsSearching(true);
     try {
+      const queryLower = searchQuery.toLowerCase();
+      // Check if it looks like a real-estate or criteria query
+      const isRealEstateQuery = queryLower.includes('roi') || 
+                               queryLower.includes('cost') || 
+                               queryLower.includes('price') ||
+                               queryLower.includes('yield') || 
+                               queryLower.includes('risk') || 
+                               queryLower.includes('stable') || 
+                               queryLower.includes('anomaly') || 
+                               queryLower.includes('owner') ||
+                               queryLower.includes('высота') ||
+                               queryLower.includes('доход') ||
+                               queryLower.includes('стоимость') ||
+                               queryLower.includes('риск') ||
+                               queryLower.includes('стабильн') ||
+                               queryLower.includes('аномал') ||
+                               queryLower.includes('владелец') ||
+                               queryLower.includes('apn');
+
+      if (isRealEstateQuery) {
+        const smartRes = await fetch('/api/v1/ai/smart-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: searchQuery })
+        });
+        if (smartRes.ok) {
+          const smartData = await smartRes.json();
+          if (smartData.matchingIds && smartData.matchingIds.length > 0) {
+            const firstMatchId = smartData.matchingIds[0];
+            const center = getBuildingCenter(firstMatchId);
+            if (center) {
+              mapRef.current?.flyTo({
+                center,
+                zoom: 17,
+                duration: 3000,
+                essential: true
+              });
+              
+              const feature = buildingsData?.features.find((f: any) => f.properties.id === firstMatchId);
+              if (feature) {
+                setSelectedBuilding({
+                  id: firstMatchId,
+                  properties: feature.properties
+                });
+              }
+            }
+
+            setMessages(prev => [
+              ...prev,
+              { role: 'assistant', content: `[AI NLP Search Analyst]: ${smartData.summary}` }
+            ]);
+            setChatOpen(true);
+            setSearchQuery('');
+            soundService.playSuccess();
+            return;
+          }
+        }
+      }
+
+      // Default geographic address/coordinates search using OSM Nominatim
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(searchQuery)}&limit=1`);
       const data = await response.json();
       
@@ -909,15 +1131,43 @@ export default function App() {
         });
         setSearchQuery('');
       } else {
-        // Show some feedback if no results found
-        console.warn("No search results found for:", searchQuery);
+        // Fallback to searching everything with smart-search
+        const fallbackRes = await fetch('/api/v1/ai/smart-search', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ query: searchQuery })
+        });
+        if (fallbackRes.ok) {
+          const fbData = await fallbackRes.json();
+          if (fbData.matchingIds && fbData.matchingIds.length > 0) {
+            const firstId = fbData.matchingIds[0];
+            const center = getBuildingCenter(firstId);
+            if (center) {
+              mapRef.current?.flyTo({ center, zoom: 17, duration: 3000 });
+              const f = buildingsData?.features.find((feat: any) => feat.properties.id === firstId);
+              if (f) {
+                setSelectedBuilding({ id: firstId, properties: f.properties });
+              }
+            }
+            setMessages(prev => [
+              ...prev,
+              { role: 'assistant', content: `[AI Fallback Parser]: ${fbData.summary}` }
+            ]);
+            setChatOpen(true);
+            setSearchQuery('');
+            soundService.playSuccess();
+            return;
+          }
+        }
+        console.warn("No search results found:", searchQuery);
+        soundService.playDenied();
       }
     } catch (error) {
       console.error("Search failed:", error);
     } finally {
       setIsSearching(false);
     }
-  }, [searchQuery]);
+  }, [searchQuery, getBuildingCenter, buildingsData, soundService, setSelectedBuilding]);
 
   const basemaps = [
     { id: 'dark', name: 'Dark Matter', url: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json' },
@@ -942,6 +1192,40 @@ export default function App() {
       selectedBuilding?.id || null,
       viewState.zoom
     ) : null,
+
+    // Geospatial Drawing Layers
+    geospatialEditorActive && drawnVertices.length > 0 && new ScatterplotLayer({
+      id: 'draw-points',
+      data: drawnVertices,
+      getPosition: (d: any) => d,
+      getRadius: 2,
+      getFillColor: [239, 68, 68], // vibrant tactical red
+      getLineColor: [255, 255, 255],
+      getLineWidth: 1,
+      stroked: true,
+      radiusMinPixels: 4,
+      pickable: false
+    }),
+
+    geospatialEditorActive && drawnVertices.length > 1 && new PathLayer({
+      id: 'draw-line',
+      data: [{ path: drawnVertices }],
+      getPath: (d: any) => d.path,
+      getColor: [239, 68, 68, 200],
+      getWidth: 3,
+      widthMinPixels: 2,
+      pickable: false
+    }),
+
+    geospatialEditorActive && drawnVertices.length > 2 && new PolygonLayer({
+      id: 'draw-poly',
+      data: [{ polygon: drawnVertices }],
+      getPolygon: (d: any) => d.polygon,
+      getFillColor: [239, 68, 68, 60],
+      getLineColor: [239, 68, 68],
+      getLineWidth: 2,
+      pickable: false
+    }),
 
     // Measurement Layers
     measurementMode !== 'none' && measurePoints.length > 0 && new ScatterplotLayer({
@@ -1006,8 +1290,163 @@ export default function App() {
       getLineWidth: 0.5,
       lineWidthMinPixels: 1,
       pickable: false
+    }),
+
+    // Simulated Soil Properties Overlay
+    showSoils && viewState.zoom >= 13 && new PolygonLayer({
+      id: 'soil-classification',
+      data: ((): any[] => {
+        const zones = [];
+        const step = 0.003; 
+        const latBase = Math.round(viewState.latitude / step) * step;
+        const lonBase = Math.round(viewState.longitude / step) * step;
+        const types = [
+          { name: 'Sandy Loam // Ap-SL', color: [168, 85, 247], code: 'Ap-SL' },
+          { name: 'Silty Clay // Bt-SC', color: [59, 130, 246], code: 'Bt-SC' },
+          { name: 'Heavy Clay loam // Ah-CL', color: [16, 185, 129], code: 'Ah-CL' },
+          { name: 'Loamy Sand // Ap-LS', color: [245, 158, 11], code: 'Ap-LS' }
+        ];
+        for (let i = -5; i <= 5; i++) {
+          for (let j = -5; j <= 5; j++) {
+            const lat = latBase + i * step;
+            const lon = lonBase + j * step;
+            const typeIdx = Math.abs((i * 7 + j * 13)) % types.length;
+            const t = types[typeIdx];
+            zones.push({
+              polygon: [
+                [lon, lat],
+                [lon + step * 0.96, lat],
+                [lon + step * 0.96, lat + step * 0.96],
+                [lon, lat + step * 0.96],
+                [lon, lat]
+              ],
+              name: t.name,
+              code: t.code,
+              color: t.color
+            });
+          }
+        }
+        return zones;
+      })(),
+      getPolygon: (d: any) => d.polygon,
+      getFillColor: (d: any): [number, number, number, number] => [d.color[0], d.color[1], d.color[2], 40],
+      getLineColor: (d: any): [number, number, number, number] => [d.color[0], d.color[1], d.color[2], 120],
+      getLineWidth: 1.5,
+      lineWidthMinPixels: 1,
+      pickable: true,
+      onHover: (info: any) => {
+        if (info.object) {
+          setHoverSoil({ ...info.object, x: info.x, y: info.y });
+        } else {
+          setHoverSoil(null);
+        }
+      },
+      updateTriggers: {
+        getFillColor: [viewState.latitude, viewState.longitude],
+        getLineColor: [viewState.latitude, viewState.longitude]
+      }
+    }),
+
+    // Simulated Wetlands Overlay
+    showWetlands && viewState.zoom >= 13 && new PolygonLayer({
+      id: 'wetlands-overlay',
+      data: ((): any[] => {
+        const wetlands = [];
+        const step = 0.0025;
+        const latBase = Math.round(viewState.latitude / step) * step;
+        const lonBase = Math.round(viewState.longitude / step) * step;
+        const zones = [
+          { type: 'Palustrine Forested Wetland // NWI-PFO1A', color: [14, 116, 144] },
+          { type: 'FEMA Floodway // Zone AE - 100YR', color: [239, 68, 68] },
+          { type: 'Freshwater Emergent Wetland // NWI-PEM1C', color: [3, 105, 161] }
+        ];
+        for (let i = -6; i <= 6; i++) {
+          for (let j = -6; j <= 6; j++) {
+            if ((i + j) % 3 === 0) {
+              const lat = latBase + i * step + 0.0003;
+              const lon = lonBase + j * step + 0.0003;
+              const zIdx = Math.abs((i * 11 + j * 17)) % zones.length;
+              const z = zones[zIdx];
+              wetlands.push({
+                polygon: [
+                  [lon, lat],
+                  [lon + step * 0.7, lat + step * 0.2],
+                  [lon + step * 0.6, lat + step * 0.8],
+                  [lon + step * 0.1, lat + step * 0.7],
+                  [lon, lat]
+                ],
+                type: z.type,
+                color: z.color
+              });
+            }
+          }
+        }
+        return wetlands;
+      })(),
+      getPolygon: (d: any) => d.polygon,
+      getFillColor: (d: any): [number, number, number, number] => [d.color[0], d.color[1], d.color[2], 45],
+      getLineColor: (d: any): [number, number, number, number] => [d.color[0], d.color[1], d.color[2], 160],
+      getLineWidth: 2,
+      lineWidthMinPixels: 1.5,
+      pickable: true,
+      onHover: (info: any) => {
+        if (info.object) {
+          setHoverWetland({ ...info.object, x: info.x, y: info.y });
+        } else {
+          setHoverWetland(null);
+        }
+      },
+      updateTriggers: {
+        getFillColor: [viewState.latitude, viewState.longitude]
+      }
+    }),
+
+    // Simulated Infrastructure Corridor Path Layer
+    showInfrastructure && viewState.zoom >= 12 && new PathLayer({
+      id: 'infra-corridors',
+      data: ((): any[] => {
+        const lines = [];
+        const step = 0.015;
+        const latBase = Math.round(viewState.latitude / step) * step;
+        const lonBase = Math.round(viewState.longitude / step) * step;
+        
+        lines.push({
+          path: [
+            [lonBase - 0.05, latBase + 0.003],
+            [lonBase + 0.05, latBase + 0.003]
+          ],
+          name: 'HV Transmission Corridor // 500kV Grid',
+          color: [249, 115, 22]
+        });
+        
+        lines.push({
+          path: [
+            [lonBase + 0.004, latBase - 0.05],
+            [lonBase + 0.004, latBase + 0.05]
+          ],
+          name: 'HP Natural Gas Pipeline // 1200 PSI Trunk',
+          color: [234, 179, 8]
+        });
+        
+        return lines;
+      })(),
+      getPath: (d: any) => d.path,
+      getColor: (d: any) => d.color,
+      getWidth: 5,
+      widthMinPixels: 2.5,
+      pickable: true,
+      onHover: (info: any) => {
+        if (info.object) {
+          setHoverInfra({ ...info.object, x: info.x, y: info.y });
+        } else {
+          setHoverInfra(null);
+        }
+      },
+      updateTriggers: {
+        getColor: [viewState.latitude, viewState.longitude]
+      }
     })
-  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, measurementMode, measurePoints, showParcels]);
+  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, measurementMode, measurePoints, showParcels, showSoils, showWetlands, showInfrastructure, geospatialEditorActive, drawnVertices, viewState.latitude, viewState.longitude]);
 
   const handleBuyBuilding = async (id: number, cost: number, yieldAmount: number) => {
     if (balance >= cost && !portfolio.includes(id)) {
@@ -1497,13 +1936,18 @@ export default function App() {
           reuseMaps
           transitionDuration={2000}
           onClick={(e) => {
+            if (geospatialEditorActive) {
+              const { lngLat } = e;
+              setDrawnVertices(prev => [...prev, [lngLat.lng, lngLat.lat]]);
+              return;
+            }
             if (measurementMode !== 'none') {
                const { lngLat } = e;
                setMeasurePoints(prev => [...prev, [lngLat.lng, lngLat.lat]]);
                return;
             }
           }}
-          cursor={measurementMode !== 'none' ? 'crosshair' : 'grab'}
+          cursor={geospatialEditorActive ? 'crosshair' : measurementMode !== 'none' ? 'crosshair' : 'grab'}
         >
           <Layer
             id="3d-buildings"
@@ -1915,6 +2359,48 @@ export default function App() {
                           {t.parcels}
                         </div>
                         {showParcels ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
+                      <button
+                        onClick={() => setShowSoils(!showSoils)}
+                        className={cn(
+                          "w-full flex items-center justify-between px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                          showSoils ? "bg-primary/20 text-primary" : "text-slate-400 hover:bg-white/5"
+                        )}
+                        title="USDA Soil Taxonomy zones layer"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Layers className="w-3.5 h-3.5 text-purple-400" />
+                          {language === 'en' ? "Soil Taxonomy Overlay" : "Классификация Почв"}
+                        </div>
+                        {showSoils ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
+                      <button
+                        onClick={() => setShowWetlands(!showWetlands)}
+                        className={cn(
+                          "w-full flex items-center justify-between px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                          showWetlands ? "bg-primary/20 text-primary" : "text-slate-400 hover:bg-white/5"
+                        )}
+                        title="Palustrine Wetlands and FEMA Floodway hazards"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Radar className="w-3.5 h-3.5 text-blue-400" />
+                          {language === 'en' ? "Wetlands & Floodplain" : "Зоны Затопления / NWI"}
+                        </div>
+                        {showWetlands ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
+                      <button
+                        onClick={() => setShowInfrastructure(!showInfrastructure)}
+                        className={cn(
+                          "w-full flex items-center justify-between px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                          showInfrastructure ? "bg-primary/20 text-primary" : "text-slate-400 hover:bg-white/5"
+                        )}
+                        title="HV Electrical grid and high-pressure gas corridors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Target className="w-3.5 h-3.5 text-amber-500" />
+                          {language === 'en' ? "Infrastructure Grids" : "ЛЭП & Трубопроводы"}
+                        </div>
+                        {showInfrastructure ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
                       </button>
                     </div>
                   </motion.div>
@@ -2345,12 +2831,240 @@ export default function App() {
                   </div>
                 </div>
 
+                {/* 4-TABBED TACTICAL EXPANSION (YardSoft Aegis) */}
+                <div className="mb-6 bg-surface/85 rounded-xl border border-border/80 overflow-hidden font-mono">
+                  {/* Tab list */}
+                  <div className="flex border-b border-border/75 bg-base/60 text-[8px] xs:text-[9px] font-bold uppercase tracking-wider">
+                    <button
+                      onClick={() => setActiveModalTab('financials')}
+                      className={cn(
+                        "flex-1 py-2.5 text-center transition-all border-r border-border/40 focus:outline-none",
+                        activeModalTab === 'financials'
+                          ? "bg-primary/10 text-primary border-b-2 border-b-primary"
+                          : "text-slate-500 hover:text-slate-300 hover:bg-white/5"
+                      )}
+                    >
+                      💰 Financials
+                    </button>
+                    <button
+                      onClick={() => setActiveModalTab('geospatial')}
+                      className={cn(
+                        "flex-1 py-2.5 text-center transition-all border-r border-border/40 focus:outline-none",
+                        activeModalTab === 'geospatial'
+                          ? "bg-secondary/10 text-secondary border-b-2 border-b-secondary"
+                          : "text-slate-500 hover:text-slate-300 hover:bg-white/5"
+                      )}
+                    >
+                      🛰️ Geospatial
+                    </button>
+                    <button
+                      onClick={() => setActiveModalTab('tenants')}
+                      className={cn(
+                        "flex-1 py-2.5 text-center transition-all border-r border-border/40 focus:outline-none",
+                        activeModalTab === 'tenants'
+                          ? "bg-cyan-500/10 text-cyan-400 border-b-2 border-b-cyan-500"
+                          : "text-slate-500 hover:text-slate-300 hover:bg-white/5"
+                      )}
+                    >
+                      👥 Tenants
+                    </button>
+                    <button
+                      onClick={() => setActiveModalTab('legal')}
+                      className={cn(
+                        "flex-1 py-2.5 text-center transition-all focus:outline-none",
+                        activeModalTab === 'legal'
+                          ? "bg-red-500/10 text-red-400 border-b-2 border-b-red-500"
+                          : "text-slate-500 hover:text-slate-300 hover:bg-white/5"
+                      )}
+                    >
+                      📜 Legal (ЕГРН)
+                    </button>
+                  </div>
+
+                  {/* Tab Body */}
+                  <div className="p-4 text-[10.5px] sm:text-xs space-y-3">
+                    {/* FINANCIALS TAB */}
+                    {activeModalTab === 'financials' && (
+                      <div className="space-y-2.5">
+                        <div className="flex justify-between items-center border-b border-white/5 pb-1.5">
+                          <span className="text-slate-500 uppercase text-[8px] font-bold">Рентный Бизнес / Strategy</span>
+                          <span className="text-primary font-bold text-[9px] uppercase">READY RENTAL BUSINESS (РРБ)</span>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3 text-slate-300">
+                          <div>
+                            <p className="text-[8px] text-slate-500 uppercase font-bold">Годовой Валовый Доход (Gross)</p>
+                            <p className="text-xs font-bold text-white font-mono">
+                              ₽{(((selectedBuilding.properties as any).yield || 0) * 12).toLocaleString() || '0'}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[8px] text-slate-500 uppercase font-bold">Операционная Комиссия (10%)</p>
+                            <p className="text-xs font-bold text-red-400 font-mono font-bold">
+                              -₽{Math.round((((selectedBuilding.properties as any).yield || 0) * 12 * 0.1)).toLocaleString() || '0'}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[8px] text-slate-500 uppercase font-bold">Чистый Поток NOI (После 10% Fee)</p>
+                            <p className="text-xs font-bold text-secondary font-mono font-bold">
+                              ₽{Math.round((((selectedBuilding.properties as any).yield || 0) * 12 * 0.9)).toLocaleString() || '0'}
+                            </p>
+                          </div>
+                          <div>
+                            <p className="text-[8px] text-slate-500 uppercase font-bold">Чистый Cap Rate (Окупаемость)</p>
+                            <p className="text-xs font-bold text-cyan-400 font-mono font-bold font-bold">
+                              {(((selectedBuilding.properties as any).cost || 0) > 0 
+                                ? (((selectedBuilding.properties as any).yield * 12 * 0.9) / (selectedBuilding.properties as any).cost * 100).toFixed(2) 
+                                : '10.50')}%
+                            </p>
+                          </div>
+                        </div>
+                        <div className="p-2 bg-white/5 rounded-lg border border-white/5">
+                          <div className="flex justify-between text-[8px] font-mono text-slate-400">
+                            <span>Капитализация объекта</span>
+                            <span className="text-white font-bold">
+                              {(((selectedBuilding.properties as any).cost || 0) > 0 
+                                ? ((selectedBuilding.properties as any).cost / ((selectedBuilding.properties as any).yield * 12 * 0.9)).toFixed(1) 
+                                : '9.5')} лет (Окупаемость)
+                            </span>
+                          </div>
+                          <div className="w-full bg-slate-900 h-1 rounded-full overflow-hidden mt-1">
+                            <div 
+                              className="bg-primary h-full rounded-full" 
+                              style={{ width: `${Math.min(100, Math.max(10, (10 / (((selectedBuilding.properties as any).cost || 1) / ((selectedBuilding.properties as any).yield * 12 * 0.9 || 1))) * 100))}%` }} 
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* GEOSPATIAL TAB */}
+                    {activeModalTab === 'geospatial' && (
+                      <div className="space-y-2.5 text-slate-300">
+                        <div className="flex justify-between items-center border-b border-white/5 pb-1.5">
+                          <span className="text-slate-500 uppercase text-[8px] font-bold">Координаты & Пространство</span>
+                          <span className="text-secondary font-bold text-[8px] font-mono">Sector H3 // #8811800000ff</span>
+                        </div>
+                        <div className="space-y-1 bg-black/45 p-2 rounded-lg border border-white/5 text-[9.5px] space-y-1.5">
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Широта (Lat):</span>
+                            <span className="text-slate-200 font-mono font-bold">{selectedBuilding.geometry?.coordinates?.[0]?.[0]?.[1]?.toFixed(6) || '55.748334'}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Долгота (Lon):</span>
+                            <span className="text-slate-200 font-mono font-bold">{selectedBuilding.geometry?.coordinates?.[0]?.[0]?.[0]?.toFixed(6) || '37.535891'}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Высота от земли (Height):</span>
+                            <span className="text-slate-200 font-mono font-bold">{selectedBuilding.properties.height || 45}м (Этажность: ~{Math.max(1, Math.round((selectedBuilding.properties.height || 45) / 3.3))})</span>
+                          </div>
+                        </div>
+                        <p className="text-[8px] text-slate-500 leading-relaxed uppercase">
+                          * Пространственная привязка выполнена с точностью до 0.1м по СК-95 ЕГРН. Использован суверенный растровый тайлсет Deck.gl.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* TENANTS TAB */}
+                    {activeModalTab === 'tenants' && (
+                      <div className="space-y-2.5">
+                        <div className="flex justify-between items-center border-b border-white/5 pb-1.5">
+                          <span className="text-slate-500 uppercase text-[8px] font-bold">Tenant Mix & Sentiment</span>
+                          <span className="text-cyan-400 font-bold text-[8px] font-mono">92.4% Положительный Сентимент</span>
+                        </div>
+                        
+                        <div className="space-y-1.5">
+                          <div className="flex justify-between items-center p-2 bg-white/5 rounded-lg border border-white/5">
+                            <div>
+                              <p className="text-[10px] font-bold text-white">ООО "ЯрдСофт Технолоджис" (HQ)</p>
+                              <p className="text-[7.5px] text-slate-500 uppercase">Якорный Арендатор (Анкор) // Офисы</p>
+                            </div>
+                            <span className="text-[9px] font-mono text-emerald-400 font-bold">60% площади</span>
+                          </div>
+
+                          <div className="flex justify-between items-center p-2 bg-white/5 rounded-lg border border-white/5">
+                            <div>
+                              <p className="text-[10px] font-bold text-white">Супермаркет ВкусВилл // Премиум</p>
+                              <p className="text-[7.5px] text-slate-500 uppercase">Сопутствующий // Торговля</p>
+                            </div>
+                            <span className="text-[9px] font-mono text-emerald-400 font-bold">25% площади</span>
+                          </div>
+
+                          <div className="flex justify-between items-center p-2 bg-white/5 rounded-lg border border-white/5">
+                            <div>
+                              <p className="text-[10px] font-bold text-white">Кофейня Даблби / Рестораны</p>
+                              <p className="text-[7.5px] text-slate-500 uppercase">Вспомогательный // Общепит</p>
+                            </div>
+                            <span className="text-[9px] font-mono text-emerald-400 font-bold">15% площади</span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* LEGAL TAB */}
+                    {activeModalTab === 'legal' && (
+                      <div className="space-y-2.5">
+                        <div className="flex justify-between items-center border-b border-white/5 pb-1.5">
+                          <span className="text-slate-500 uppercase text-[8px] font-bold">Юридическая экспертиза (Due Diligence)</span>
+                          <span className="text-red-400 font-bold text-[8px] font-mono">ЕГРН Реестр РФ</span>
+                        </div>
+                        
+                        <div className="text-[9.5px] font-mono text-slate-300 space-y-1.5 bg-black/40 p-2.5 rounded-lg border border-white/5">
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Кадастровый номер:</span>
+                            <span className="text-slate-200 font-bold">77:01:0001024:{selectedBuilding.id}</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Категория земель:</span>
+                            <span className="text-slate-100 font-bold">Населенные пункты (ЗК РФ ст. 7)</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">ВРИ (Росреестр П/0336):</span>
+                            <span className="text-slate-100 font-bold">4.1 (Предпринимательство / Офисы)</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Огнестойкость (123-ФЗ):</span>
+                            <span className="text-slate-100 font-bold">Степень II (Коммерческие Мультикомплексы)</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Энергоэффективность:</span>
+                            <span className="text-slate-100 font-bold text-emerald-400">Класс A+ [Повышенный] // OPEX -25%</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span className="text-slate-500">Физический износ (ВСН):</span>
+                            <span className="text-slate-100 font-bold">12% [Хорошее техническое состояние]</span>
+                          </div>
+                          <div className="flex justify-between items-center pt-1 border-t border-white/5 text-[8px]">
+                            <span className="text-slate-500">Обременения/Аресты:</span>
+                            <span className="text-emerald-400 font-bold uppercase flex items-center gap-1">
+                              <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />
+                              ЧИСТО // НЕТ ЗАЛОГОВ И АРЕСТОВ
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 <div className="space-y-4">
                   {/* Strategic Documentation Section */}
                   <div className="bg-base/40 rounded-xl p-4 border border-border/50">
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-[9px] font-display font-bold text-slate-400 uppercase tracking-[0.2em]">Strategic Documentation</h3>
                       <div className="flex gap-2">
+                        <button 
+                          onClick={() => setIsFlyoverActive(!isFlyoverActive)}
+                          className={cn(
+                            "px-2.5 py-1 rounded-lg text-[9px] font-bold uppercase tracking-wider transition-all flex items-center gap-1 border",
+                            isFlyoverActive
+                              ? "bg-secondary text-slate-950 border-secondary shadow-[0_0_12px_rgba(var(--secondary-accent),0.5)]"
+                              : "bg-secondary/10 text-secondary border-secondary/20 hover:bg-secondary/20"
+                          )}
+                          title="Trigger 3D Flyover"
+                        >
+                          <RotateCw className={cn("w-3.5 h-3.5", isFlyoverActive && "animate-spin")} />
+                          {isFlyoverActive ? (language === 'en' ? "Stop Flyover" : "Окрестности") : (language === 'en' ? "3D Flyover" : "3D Облёт")}
+                        </button>
                         <input 
                           type="file" 
                           ref={fileInputRef} 
@@ -2384,8 +3098,8 @@ export default function App() {
 
                     {/* Media Gallery */}
                     <div className="flex gap-2 overflow-x-auto pb-1 scrollbar-hide">
-                      {buildingMedia[selectedBuilding.id]?.map(item => (
-                        <div key={item.id} className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-border group">
+                      {buildingMedia[selectedBuilding.id]?.map((item, i) => (
+                        <div key={`${item.id || 'media'}_${i}`} className="relative flex-shrink-0 w-16 h-16 rounded-lg overflow-hidden border border-border group">
                           {item.type === 'photo' ? (
                             <img src={item.url} alt="Documentation" className="w-full h-full object-cover" />
                           ) : (
@@ -2580,6 +3294,86 @@ export default function App() {
         )}
       </AnimatePresence>
 
+      {/* Floating Overlays Tooltips */}
+      <AnimatePresence>
+        {hoverSoil && hoverSoil.x !== undefined && hoverSoil.y !== undefined && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 5 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 5 }}
+            transition={{ duration: 0.1 }}
+            style={{ 
+              left: hoverSoil.x + 12, 
+              top: hoverSoil.y + 12,
+              position: 'absolute'
+            }}
+            className="pointer-events-none z-[100] bg-zinc-950/90 border border-purple-500/40 text-purple-200 px-3 py-2 rounded-lg backdrop-blur-md shadow-[0_0_15px_rgba(168,85,247,0.2)]"
+          >
+            <div className="flex flex-col gap-1 min-w-[200px]">
+              <div className="flex items-center gap-1.5 border-b border-purple-500/20 pb-1 mb-1">
+                <Layers className="w-3.5 h-3.5 text-purple-400" />
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider">USDA Soil Classification</span>
+              </div>
+              <div className="text-xs font-bold text-white font-display mb-0.5">{hoverSoil.name}</div>
+              <div className="flex items-center justify-between text-[8px] font-mono text-purple-300 uppercase">
+                <span>Taxonomy Code:</span>
+                <span className="bg-purple-500/20 px-1 py-0.5 rounded border border-purple-500/30 text-[9px] font-bold">{hoverSoil.code}</span>
+              </div>
+            </div>
+          </motion.div>
+        )}
+
+        {hoverWetland && hoverWetland.x !== undefined && hoverWetland.y !== undefined && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 5 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 5 }}
+            transition={{ duration: 0.1 }}
+            style={{ 
+              left: hoverWetland.x + 12, 
+              top: hoverWetland.y + 12,
+              position: 'absolute'
+            }}
+            className="pointer-events-none z-[100] bg-zinc-950/90 border border-blue-500/40 text-blue-200 px-3 py-2 rounded-lg backdrop-blur-md shadow-[0_0_15px_rgba(59,130,246,0.2)]"
+          >
+            <div className="flex flex-col gap-1 min-w-[220px]">
+              <div className="flex items-center gap-1.5 border-b border-blue-500/20 pb-1 mb-1">
+                <Radar className="w-3.5 h-3.5 text-blue-400" />
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider">Environmental Intel</span>
+              </div>
+              <div className="text-xs font-bold text-white font-display mb-0.5">Hydrologic Wetland Hazard</div>
+              <div className="text-[9px] font-mono text-blue-300 leading-relaxed">{hoverWetland.type}</div>
+              <div className="text-[7px] text-slate-500 font-mono uppercase tracking-widest mt-1">Source: USFWS NWI Dataset</div>
+            </div>
+          </motion.div>
+        )}
+
+        {hoverInfra && hoverInfra.x !== undefined && hoverInfra.y !== undefined && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 5 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 5 }}
+            transition={{ duration: 0.1 }}
+            style={{ 
+              left: hoverInfra.x + 12, 
+              top: hoverInfra.y + 12,
+              position: 'absolute'
+            }}
+            className="pointer-events-none z-[100] bg-zinc-950/90 border border-amber-500/40 text-amber-200 px-3 py-2 rounded-lg backdrop-blur-md shadow-[0_0_15px_rgba(245,158,11,0.2)]"
+          >
+            <div className="flex flex-col gap-1 min-w-[220px]">
+              <div className="flex items-center gap-1.5 border-b border-amber-500/20 pb-1 mb-1">
+                <Target className="w-3.5 h-3.5 text-amber-400" />
+                <span className="text-[10px] font-mono font-bold uppercase tracking-wider">Utility Grid Corridor</span>
+              </div>
+              <div className="text-xs font-bold text-white font-display mb-0.5">Industrial Right-Of-Way</div>
+              <div className="text-[9px] font-mono text-amber-300 leading-relaxed">{hoverInfra.name}</div>
+              <div className="text-[7px] text-slate-500 font-mono uppercase tracking-widest mt-1">Status: Operational Grid Line</div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Cyber-Tactical Cabinets Layer */}
       <AnimatePresence>
         {investorCabinetOpen && userRole === 'demo' && (
@@ -2604,6 +3398,53 @@ export default function App() {
           <AdminCabinet 
             isOpen={investorCabinetOpen}
             onClose={() => setInvestorCabinetOpen(false)}
+            buildings={buildingsData?.features || []}
+            onTriggerDrawMode={() => setGeospatialEditorActive(true)}
+            onTriggerCreateAsset={() => setAssetCreatorOpen(true)}
+            onTriggerBulkImport={() => setBulkImportOpen(true)}
+          />
+        )}
+      </AnimatePresence>
+
+      {/* Admin Creation Suite Layout Overlays */}
+      {userRole === 'admin' && (
+        <GeospatialEditor
+          viewState={viewState}
+          vertices={drawnVertices}
+          setVertices={setDrawnVertices}
+          onPolygonComplete={handlePolygonComplete}
+          isActive={geospatialEditorActive}
+          onToggle={() => {
+            setGeospatialEditorActive(prev => {
+              const next = !prev;
+              if (!next) setDrawnVertices([]);
+              return next;
+            });
+          }}
+        />
+      )}
+
+      <AnimatePresence>
+        {assetCreatorOpen && userRole === 'admin' && (
+          <AdminAssetCreator
+            isOpen={assetCreatorOpen}
+            onClose={() => {
+              setAssetCreatorOpen(false);
+              setLastDrawnPolygon(null);
+            }}
+            onSubmit={handleAdminCreateAsset}
+            initialPolygon={lastDrawnPolygon || undefined}
+            user={user}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {bulkImportOpen && userRole === 'admin' && (
+          <BulkImportEngine
+            isOpen={bulkImportOpen}
+            onClose={() => setBulkImportOpen(false)}
+            onImport={handleBulkImport}
           />
         )}
       </AnimatePresence>

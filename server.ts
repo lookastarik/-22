@@ -3,6 +3,10 @@ import path from "path";
 import { createServer as createViteServer } from "vite";
 import sqlite3 from "sqlite3";
 import { open } from "sqlite";
+import { GoogleGenAI, Type } from "@google/genai";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 // Rule 2: "Live" Building (RLS + Data Mapping)
 // ... (mockBuildingsData remains the same)
@@ -242,6 +246,330 @@ async function startServer() {
       });
     } catch (error) {
       res.status(500).json({ error: "Database error" });
+    }
+  });
+
+  // Insert single building
+  app.post("/api/v1/buildings", async (req, res) => {
+    const { height, roi, status, owner_id, cost, yield: yieldVal, coordinates } = req.body;
+    try {
+      const maxIdRow = await db.get("SELECT MAX(id) as maxId FROM buildings");
+      const nextId = (maxIdRow?.maxId || 200) + 1;
+      
+      const coordsString = typeof coordinates === 'string' ? coordinates : JSON.stringify(coordinates);
+
+      await db.run(
+        "INSERT INTO buildings (id, height, roi, status, owner_id, cost, yield, coordinates) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+        [nextId, height || 25, roi || 10, status || 1, owner_id || "admin", cost || 50000000, yieldVal || 450000, coordsString]
+      );
+      
+      const newBuilding = await db.get("SELECT * FROM buildings WHERE id = ?", [nextId]);
+      res.status(201).json(newBuilding);
+    } catch (error) {
+      console.error("Failed to insert building:", error);
+      res.status(500).json({ error: "Database save error" });
+    }
+  });
+
+  // Bulk Ingest buildings
+  app.post("/api/v1/buildings/bulk", async (req, res) => {
+    const { assets } = req.body;
+    if (!assets || !Array.isArray(assets)) {
+      return res.status(400).json({ error: "Assets array is required" });
+    }
+
+    try {
+      const maxIdRow = await db.get("SELECT MAX(id) as maxId FROM buildings");
+      let currentId = maxIdRow?.maxId || 1000;
+
+      const inserted = [];
+      for (const asset of assets) {
+        currentId += 1;
+        const coordsString = typeof asset.polygon === 'string' 
+          ? asset.polygon 
+          : JSON.stringify(asset.polygon || [
+              [
+                [asset.longitude - 0.0002, asset.latitude - 0.0002],
+                [asset.longitude + 0.0002, asset.latitude - 0.0002],
+                [asset.longitude + 0.0002, asset.latitude + 0.0002],
+                [asset.longitude - 0.0002, asset.latitude + 0.0002],
+                [asset.longitude - 0.0002, asset.latitude - 0.0002]
+              ]
+            ]);
+
+        // Calculate gross ROI
+        const calculatedRoi = asset.cost > 0 ? (asset.yield * 12 / asset.cost) * 100 : 10;
+
+        await db.run(
+          "INSERT INTO buildings (id, height, roi, status, owner_id, cost, yield, coordinates) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+          [
+            currentId, 
+            asset.height || 25, 
+            parseFloat(calculatedRoi.toFixed(2)), 
+            asset.status || 1, 
+            asset.owner || "admin", 
+            asset.cost || 50000000, 
+            asset.yield || 450000, 
+            coordsString
+          ]
+        );
+        inserted.push(currentId);
+      }
+
+      res.status(201).json({ count: inserted.length, inserted_ids: inserted });
+    } catch (error) {
+      console.error("Failed to bulk insert buildings:", error);
+      res.status(500).json({ error: "Database bulk insert error" });
+    }
+  });
+
+  // Server-Side Gemini API Proxy for AI Auto-Fill
+  app.post("/api/v1/admin/ai-auto-fill", async (req, res) => {
+    const { address } = req.body;
+    if (!address) {
+      return res.status(400).json({ error: "Address is required" });
+    }
+
+    try {
+      const aiKey = process.env.GEMINI_API_KEY;
+      if (!aiKey) {
+        console.warn("GEMINI_API_KEY environment variable is not defined. Using high-fidelity fallback AI auto-fill.");
+        return res.json({
+          suggestedType: "office",
+          suggestedModel: "office",
+          estimatedCost: 85000000,
+          estimatedYield: 780000,
+          estimatedROI: 11.0,
+          sqft: 25000,
+          yearBuilt: 2018,
+          height: 35,
+          levels: 9,
+          parkingSpaces: 40,
+          description: `Премиальный офисный центр на ${address} с высокой транспортной доступностью.`,
+          marketContext: `Объект располагается в активно развивающемся деловом кластере у ${address}, характеризующемся стабильным спросом со стороны арендаторов класса А+.`,
+          tenantMix: ["Tech Hub", "Global Finance", "Co-working Studio"],
+          swot: {
+            advantages: ["Выгодная стратегическая локация", "Высокий пешеходный трафик", "Готовая инфраструктура"],
+            risks: ["Конкуренция со стороны бизнес-центров по соседству", "Небольшой уровень инфляционных рисков"]
+          }
+        });
+      }
+
+      const ai = new GoogleGenAI({
+        apiKey: aiKey,
+        httpOptions: {
+          headers: {
+            'User-Agent': 'aistudio-build',
+          }
+        }
+      });
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.5-flash",
+        contents: `Analyze real estate at: "${address}". Return JSON following this structure:
+        {
+          "suggestedType": "office|retail|warehouse|residential",
+          "suggestedModel": "house|apartment|warehouse|office",
+          "estimatedCost": number (value in RUB, realistically between 5000000 and 500000000 based on scale),
+          "estimatedYield": number (monthly yield in RUB, realistically between 50000 and 5000000 based on cost),
+          "estimatedROI": number,
+          "sqft": number (area in square feet),
+          "yearBuilt": number,
+          "height": number (meters),
+          "levels": number,
+          "parkingSpaces": number,
+          "description": "tactical 2-sentence description of the property in Russian",
+          "marketContext": "1 paragraph about the local surroundings and investment potential of ${address} in Russian",
+          "tenantMix": ["type1", "type2", "type3"],
+          "swot": {
+            "advantages": ["str1", "str2", "str3"],
+            "risks": ["risk1", "risk2"]
+          }
+        }`,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              suggestedType: { type: Type.STRING },
+              suggestedModel: { type: Type.STRING },
+              estimatedCost: { type: Type.NUMBER },
+              estimatedYield: { type: Type.NUMBER },
+              estimatedROI: { type: Type.NUMBER },
+              sqft: { type: Type.NUMBER },
+              yearBuilt: { type: Type.NUMBER },
+              height: { type: Type.NUMBER },
+              levels: { type: Type.NUMBER },
+              parkingSpaces: { type: Type.NUMBER },
+              description: { type: Type.STRING },
+              marketContext: { type: Type.STRING },
+              tenantMix: { type: Type.ARRAY, items: { type: Type.STRING } },
+              swot: {
+                type: Type.OBJECT,
+                properties: {
+                  advantages: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  risks: { type: Type.ARRAY, items: { type: Type.STRING } }
+                }
+              }
+            },
+            required: ["suggestedType", "estimatedCost", "estimatedYield", "description", "swot"]
+          }
+        }
+      });
+
+      const textResult = response.text;
+      if (!textResult) {
+        throw new Error("Empty response from Gemini API");
+      }
+
+      const parsed = JSON.parse(textResult.trim());
+      res.json(parsed);
+
+    } catch (error: any) {
+      console.error("Gemini AI Auto-Fill failed on server:", error);
+      res.status(500).json({ error: "AI analysis failed on backend", message: error?.message });
+    }
+  });
+
+  // Land id-inspired AI Smart NLP Search API
+  app.post("/api/v1/ai/smart-search", async (req, res) => {
+    const { query: textQuery } = req.body;
+    if (!textQuery) {
+      return res.status(400).json({ error: "Query is required" });
+    }
+
+    let minRoi: number | null = null;
+    let minCost: number | null = null;
+    let maxCost: number | null = null;
+    let minHeight: number | null = null;
+    let statusFilter: number | null = null;
+    let ownerFilter: string | null = null;
+    let summary = `Searching registry for: "${textQuery}"`;
+
+    const aiKey = process.env.GEMINI_API_KEY;
+    if (aiKey) {
+      try {
+        const ai = new GoogleGenAI({
+          apiKey: aiKey,
+          httpOptions: {
+            headers: {
+              'User-Agent': 'aistudio-build',
+            }
+          }
+        });
+
+        const response = await ai.models.generateContent({
+          model: "gemini-3.5-flash",
+          contents: `Analyze this real estate map intelligence query: "${textQuery}". 
+          Extract searching variables in JSON. Coordinates should not be extracted, focus on numeric range filters, owner substring, and status code (1=stable, 2=risk, 3=anomalous).
+          Return structure:
+          {
+            "minRoi": number | null,
+            "minCost": number | null,
+            "maxCost": number | null,
+            "minHeight": number | null,
+            "status": number | null,
+            "owner": string | null,
+            "explanation": "concise 1-sentence tactical description in Russian or English matching user language"
+          }`,
+          config: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                minRoi: { type: Type.NUMBER },
+                minCost: { type: Type.NUMBER },
+                maxCost: { type: Type.NUMBER },
+                minHeight: { type: Type.NUMBER },
+                status: { type: Type.NUMBER },
+                owner: { type: Type.STRING },
+                explanation: { type: Type.STRING }
+              }
+            }
+          }
+        });
+
+        const parsedContent = JSON.parse(response.text?.trim() || "{}");
+        minRoi = parsedContent.minRoi ?? null;
+        minCost = parsedContent.minCost ?? null;
+        maxCost = parsedContent.maxCost ?? null;
+        minHeight = parsedContent.minHeight ?? null;
+        statusFilter = parsedContent.status ?? null;
+        ownerFilter = parsedContent.owner ?? null;
+        summary = parsedContent.explanation || summary;
+
+      } catch (err) {
+        console.error("Gemini query parsing failed, using regex fallback:", err);
+      }
+    }
+
+    // Fallback regex parsing
+    if (!aiKey || (minRoi === null && minCost === null && minHeight === null && statusFilter === null)) {
+      const queryLower = textQuery.toLowerCase();
+      
+      // Parse ROI
+      const roiMatch = queryLower.match(/roi\s*(?:>|>=|больше|выше)?\s*(\d+)/i);
+      if (roiMatch) minRoi = parseFloat(roiMatch[1]);
+
+      // Parse Cost
+      const costMatch = queryLower.match(/(?:cost|цена|стоимость)\s*(?:>|>=|больше)?\s*(\d+)/i);
+      if (costMatch) minCost = parseFloat(costMatch[1]);
+      
+      // Parse Height
+      const heightMatch = queryLower.match(/(?:height|высота)\s*(?:>|>=|больше)?\s*(\d+)/i);
+      if (heightMatch) minHeight = parseFloat(heightMatch[1]);
+
+      // Parse Status
+      if (queryLower.includes('risk') || queryLower.includes('риск')) statusFilter = 2;
+      else if (queryLower.includes('stable') || queryLower.includes('стабильн')) statusFilter = 1;
+      else if (queryLower.includes('anomaly') || queryLower.includes('аномал')) statusFilter = 3;
+
+      // Parse Owner
+      const ownerMatch = queryLower.match(/(?:owner|владелец)\s+(\w+)/i);
+      if (ownerMatch) ownerFilter = ownerMatch[1];
+    }
+
+    try {
+      let sql = "SELECT * FROM buildings WHERE 1=1";
+      const params: any[] = [];
+
+      if (minRoi !== null) {
+        sql += " AND roi >= ?";
+        params.push(minRoi);
+      }
+      if (minCost !== null) {
+        sql += " AND cost >= ?";
+        params.push(minCost);
+      }
+      if (maxCost !== null) {
+        sql += " AND cost <= ?";
+        params.push(maxCost);
+      }
+      if (minHeight !== null) {
+        sql += " AND height >= ?";
+        params.push(minHeight);
+      }
+      if (statusFilter !== null) {
+        sql += " AND status = ?";
+        params.push(statusFilter);
+      }
+      if (ownerFilter !== null) {
+        sql += " AND owner_id LIKE ?";
+        params.push(`%${ownerFilter}%`);
+      }
+
+      const results = await db.all(sql, params);
+
+      res.json({
+        matchingIds: results.map(r => r.id),
+        count: results.length,
+        filters: { minRoi, minCost, maxCost, minHeight, statusFilter, ownerFilter },
+        summary: summary || `Found ${results.length} properties matching query criteria.`
+      });
+
+    } catch (dbErr) {
+      console.error("Smart search db query error:", dbErr);
+      res.status(500).json({ error: "Database search error" });
     }
   });
 
