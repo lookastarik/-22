@@ -73,6 +73,11 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
+import { useRoleAccess, checkPermission } from './roles/permissions';
+import { RoleGate } from './roles/RoleGate';
+import { DemoCabinet } from './cabinet/DemoCabinet';
+import { InvestorCabinet } from './cabinet/InvestorCabinet';
+import { AdminCabinet } from './cabinet/AdminCabinet';
 
 // Types
 interface BuildingInfo {
@@ -506,9 +511,9 @@ export default function App() {
   
   const [hoverInfo, setHoverInfo] = useState<BuildingInfo | null>(null);
   const [selectedBuilding, setSelectedBuilding] = useState<BuildingInfo | null>(null);
-  const [user, setUser] = useState<FirebaseUser | null>(null);
+  const [user, setUser] = useState<any>(null);
   const [isAuthReady, setIsAuthReady] = useState(false);
-  const [userRole, setUserRole] = useState<'anonymous' | 'investor' | 'admin'>('anonymous');
+  const [userRole, setUserRole] = useState<'demo' | 'investor' | 'admin'>('demo');
   const [balance, setBalance] = useState(5000000);
   const [portfolio, setPortfolio] = useState<number[]>([]);
   const [chatOpen, setChatOpen] = useState(false);
@@ -571,6 +576,8 @@ export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [ pulse, setPulse ] = useState(0);
+  const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
+
   const [authStatusMessage, setAuthStatusMessage] = useState<{ text: string, type: 'error' | 'success' | 'info' } | null>(null);
 
   useEffect(() => {
@@ -623,15 +630,34 @@ export default function App() {
   const currentMapStyle = useMemo(() => {
     return (mapStyles as any)[mapMode] || mapStyles.dark;
   }, [mapMode, mapStyles]);
+  // Restore mock user from localStorage if present on mount
+  useEffect(() => {
+    const cachedUser = localStorage.getItem('tactical_user');
+    const cachedRole = localStorage.getItem('yardsoft_role');
+    if (cachedUser && cachedRole) {
+      setUser(JSON.parse(cachedUser));
+      setUserRole(cachedRole as any);
+      setIsAuthReady(true);
+    }
+  }, []);
+
   // Firebase Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (firebaseUser) => {
-      setUser(firebaseUser);
-      setIsAuthReady(true);
-      if (!firebaseUser) {
-        setUserRole('anonymous');
-        setPortfolio([]);
-        setBalance(5000000);
+      if (firebaseUser) {
+        localStorage.removeItem('tactical_user');
+        localStorage.removeItem('yardsoft_role');
+        setUser(firebaseUser);
+        setIsAuthReady(true);
+      } else {
+        const cachedUser = localStorage.getItem('tactical_user');
+        if (!cachedUser) {
+          setUser(null);
+          setUserRole('demo');
+          setPortfolio([]);
+          setBalance(5000000);
+          setIsAuthReady(true);
+        }
       }
     });
     return () => unsubscribe();
@@ -639,6 +665,7 @@ export default function App() {
 
   // Sync User Profile from SQLite API
   useEffect(() => {
+    if (localStorage.getItem('tactical_user')) return;
     if (!user || !isAuthReady) return;
 
     const syncUser = async () => {
@@ -646,7 +673,7 @@ export default function App() {
         const response = await fetch(`/api/user/${user.uid}`);
         if (response.ok) {
           const data = await response.json();
-          setUserRole(data.role || 'anonymous');
+          setUserRole(data.role || 'demo');
           setBalance(data.balance ?? 5000000);
           setPortfolio(data.portfolio || []);
         } else {
@@ -681,7 +708,24 @@ export default function App() {
     syncUser();
   }, [user, isAuthReady]);
 
-  const handleLogin = async () => {
+  const handleLogin = async (role?: 'demo' | 'investor' | 'admin') => {
+    if (role) {
+      const mockUser = {
+        uid: 'user_' + Math.random().toString(36).substring(2, 11),
+        email: role === 'admin' ? 'admin@yardsoft.ru' : 'investor@example.com',
+        displayName: role === 'admin' ? 'System Admin' : 'Luka Starik',
+        photoURL: 'https://api.dicebear.com/7.x/avataaars/svg?seed=' + role,
+        role: role
+      };
+      
+      setUserRole(role);
+      setUser(mockUser);
+      localStorage.setItem('tactical_user', JSON.stringify(mockUser));
+      localStorage.setItem('yardsoft_role', role);
+      setAuthStatusMessage({ text: t.loginSuccess, type: 'success' });
+      return;
+    }
+
     try {
       const provider = new GoogleAuthProvider();
       await signInWithPopup(auth, provider);
@@ -700,8 +744,13 @@ export default function App() {
 
   const handleLogout = async () => {
     try {
+      localStorage.removeItem('tactical_user');
+      localStorage.removeItem('yardsoft_role');
       await signOut(auth);
       setProfileOpen(false);
+      setUserRole('demo');
+      setPortfolio([]);
+      setBalance(5000000);
     } catch (error) {
       console.error("Logout failed:", error);
     }
@@ -735,6 +784,11 @@ export default function App() {
   const [scanlineIntensity, setScanlineIntensity] = useState(0.3);
 
   const [buildingsData, setBuildingsData] = useState<any>(null);
+
+  const portfolioDetailed = useMemo(() => {
+    if (!buildingsData || !buildingsData.features) return [];
+    return buildingsData.features.filter((f: any) => portfolio.includes(f.id));
+  }, [portfolio, buildingsData]);
 
   useEffect(() => {
     const fetchBuildings = async () => {
@@ -1649,22 +1703,65 @@ export default function App() {
               )}
             </AnimatePresence>
 
+            {/* Sovereign State: Cyber-Military Role Simulator */}
+            <div className="hidden md:flex items-center gap-1.5 mr-2 pointer-events-auto bg-slate-950/60 border border-slate-800 rounded-xl px-2.5 py-1">
+              <span className="text-[7px] text-slate-500 font-mono font-bold uppercase tracking-widest mr-1">SIM_ROLE:</span>
+              <button 
+                onClick={() => handleLogin('demo')} 
+                className={cn(
+                  "px-2 py-0.5 text-[8px] font-mono font-bold tracking-wider rounded transition-all uppercase border",
+                  userRole === 'demo' ? "bg-amber-500/10 border-amber-500/50 text-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.2)]" : "bg-transparent border-transparent text-slate-500 hover:text-slate-300"
+                )}
+              >
+                DEMO
+              </button>
+              <button 
+                onClick={() => handleLogin('investor')} 
+                className={cn(
+                  "px-2 py-0.5 text-[8px] font-mono font-bold tracking-wider rounded transition-all uppercase border",
+                  userRole === 'investor' ? "bg-primary/20 border-primary/50 text-primary shadow-[0_0_8px_rgba(var(--primary-accent),0.2)]" : "bg-transparent border-transparent text-slate-500 hover:text-slate-300"
+                )}
+              >
+                INVESTOR
+              </button>
+              <button 
+                onClick={() => handleLogin('admin')} 
+                className={cn(
+                  "px-2 py-0.5 text-[8px] font-mono font-bold tracking-wider rounded transition-all uppercase border",
+                  userRole === 'admin' ? "bg-red-500/10 border-red-500/50 text-red-400 shadow-[0_0_8px_rgba(239,68,68,0.2)]" : "bg-transparent border-transparent text-slate-500 hover:text-slate-300"
+                )}
+              >
+                ADMIN
+              </button>
+            </div>
+
             {user && (
-              <div className="hidden sm:flex framer-glass rounded-full px-4 py-2 items-center gap-3">
-                <Wallet className="w-3.5 h-3.5 text-secondary" />
-                <div className="flex flex-col">
-                  <span className="text-[8px] text-slate-500 uppercase font-bold leading-none tracking-widest">{t.treasury}</span>
-                  <span className="text-xs font-mono font-bold text-secondary">
-                    ${balance.toLocaleString()}
-                  </span>
+              <>
+                <div className="hidden sm:flex framer-glass rounded-full px-4 py-2 items-center gap-3">
+                  <Wallet className="w-3.5 h-3.5 text-secondary" />
+                  <div className="flex flex-col">
+                    <span className="text-[8px] text-slate-500 uppercase font-bold leading-none tracking-widest">{t.treasury}</span>
+                    <span className="text-xs font-mono font-bold text-secondary">
+                      ${balance.toLocaleString()}
+                    </span>
+                  </div>
                 </div>
-              </div>
+
+                {/* Console System Activator */}
+                <button 
+                  onClick={() => setInvestorCabinetOpen(!investorCabinetOpen)}
+                  className="hidden sm:flex ml-2 border border-primary/40 bg-primary/10 pl-3 pr-4 py-1.5 items-center gap-2 rounded-xl text-primary hover:bg-primary/20 transition-all uppercase font-mono tracking-widest text-[9px] font-bold shadow-[0_0_15px_rgba(var(--primary-accent),0.2)] active:scale-95 cursor-pointer pointer-events-auto"
+                >
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                  <span>{userRole === 'admin' ? 'ROOT_CON' : userRole === 'investor' ? 'PORTFOLIO_CON' : 'OBS_CON'}</span>
+                </button>
+              </>
             )}
 
             <div className="relative pointer-events-auto">
               {!user ? (
                 <button 
-                  onClick={handleLogin}
+                  onClick={() => handleLogin('demo')}
                   className="framer-button h-8 px-4 rounded-full border-primary/30 text-primary hover:bg-primary/10 transition-all shadow-[0_0_15px_rgba(var(--primary-accent),0.2)]"
                 >
                   <Key className="w-3.5 h-3.5" />
@@ -1702,7 +1799,7 @@ export default function App() {
                               <div className="flex items-center gap-1.5 mt-1">
                                 <Shield className={cn("w-3 h-3", userRole === 'admin' ? "text-white" : "text-slate-400")} />
                                 <span className="text-[10px] uppercase font-bold tracking-wider text-slate-400">
-                                  {userRole === 'anonymous' ? 'Public Access' : userRole === 'investor' ? 'Investor Mode' : 'System Admin'}
+                                  {userRole === 'demo' ? 'Public Access' : userRole === 'investor' ? 'Investor Mode' : 'System Admin'}
                                 </span>
                               </div>
                             </div>
@@ -2023,16 +2120,16 @@ export default function App() {
                 ) : (
                   <button 
                     onClick={() => handleBuyBuilding(hoverInfo.id, (hoverInfo.properties as any).cost, (hoverInfo.properties as any).yield)}
-                    disabled={balance < (hoverInfo.properties as any).cost}
+                    disabled={balance < (hoverInfo.properties as any).cost || !checkPermission(userRole, 'canTrade')}
                     className={cn(
                       "w-full py-2.5 px-3 rounded-lg flex items-center justify-center gap-2 text-[10px] font-display font-bold uppercase tracking-[0.2em] transition-all energy-border",
-                      balance >= (hoverInfo.properties as any).cost
+                      balance >= (hoverInfo.properties as any).cost && checkPermission(userRole, 'canTrade')
                         ? "bg-primary text-white hover:bg-primary/80 shadow-[0_0_20px_rgba(var(--primary-accent),0.4)] active:scale-[0.98]"
                         : "bg-slate-800/50 text-slate-500 cursor-not-allowed border border-slate-700/50"
                     )}
                   >
                     <ShoppingCart className="w-3.5 h-3.5" />
-                    {t.buyAsset}
+                    {checkPermission(userRole, 'canTrade') ? t.buyAsset : '🔒 Demo Only'}
                   </button>
                 )}
               </div>
@@ -2375,16 +2472,16 @@ export default function App() {
                           handleBuyBuilding(selectedBuilding.id, (selectedBuilding.properties as any).cost, (selectedBuilding.properties as any).yield);
                           setSelectedBuilding(null);
                         }}
-                        disabled={balance < (selectedBuilding.properties as any).cost}
+                        disabled={balance < (selectedBuilding.properties as any).cost || !checkPermission(userRole, 'canTrade')}
                         className={cn(
                           "flex-[2] font-display font-bold py-3 rounded-lg transition-all active:scale-95 flex items-center justify-center gap-2 uppercase tracking-[0.2em] text-[10px] energy-border",
-                          balance >= (selectedBuilding.properties as any).cost 
+                          balance >= (selectedBuilding.properties as any).cost && checkPermission(userRole, 'canTrade')
                             ? "bg-primary text-white shadow-[0_0_20px_rgba(var(--primary-accent),0.4)]" 
                             : "bg-base text-slate-600 cursor-not-allowed border border-border"
                         )}
                       >
                         <ShoppingCart className="w-3.5 h-3.5" />
-                        {t.buyAsset}
+                        {checkPermission(userRole, 'canTrade') ? t.buyAsset : '🔒 Demo Only'}
                       </button>
                     )}
                   </div>
@@ -2480,6 +2577,34 @@ export default function App() {
               </div>
             </div>
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Cyber-Tactical Cabinets Layer */}
+      <AnimatePresence>
+        {investorCabinetOpen && userRole === 'demo' && (
+          <DemoCabinet 
+            isOpen={investorCabinetOpen}
+            onClose={() => setInvestorCabinetOpen(false)}
+            t={t}
+          />
+        )}
+        {investorCabinetOpen && userRole === 'investor' && (
+          <InvestorCabinet 
+            isOpen={investorCabinetOpen}
+            onClose={() => setInvestorCabinetOpen(false)}
+            balance={balance}
+            portfolioValue={portfolioValue}
+            portfolio={portfolioDetailed}
+            onSelectAsset={(asset: any) => setSelectedBuilding(asset)}
+            t={t}
+          />
+        )}
+        {investorCabinetOpen && userRole === 'admin' && (
+          <AdminCabinet 
+            isOpen={investorCabinetOpen}
+            onClose={() => setInvestorCabinetOpen(false)}
+          />
         )}
       </AnimatePresence>
     </div>

@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  # ==========================================
+  # SOVEREIGN STACK: Palantir Invest App Engine
+  # ==========================================
+  app:
+    container_name: palantir-app
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      # PostgreSQL/PostGIS Connection String (Sovereign Stack Integration)
+      - DATABASE_URL=postgres://palantir_admin:cyber_military_secure_pass@db:5432/palantir_invest
+      # Gemini API key (can be sourced from host environment or local secrets)
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - APP_URL=${APP_URL:-http://localhost:3000}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - palantir-net
+
+  # ==========================================
+  # GEO-ENGINE: Relational PostGIS Spatial DB
+  # ==========================================
+  db:
+    container_name: palantir-postgis
+    image: postgis/postgis:15-3.3
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=palantir_admin
+      - POSTGRES_PASSWORD=cyber_military_secure_pass
+      - POSTGRES_DB=palantir_invest
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U palantir_admin -d palantir_invest"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - palantir-net
+
+volumes:
+  postgres_data:
+    driver: local
+
+networks:
+  palantir-net:
+    driver: bridge
