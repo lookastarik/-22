@@ -609,6 +609,10 @@ export default function App() {
 
   // New States
   const [language, setLanguage] = useState<'en' | 'ru'>('en');
+  const [interfaceStyle, setInterfaceStyle] = useState<'tactical' | 'civilian'>(() => {
+    const saved = localStorage.getItem('yardsoft_interface_style');
+    return (saved === 'civilian' ? 'civilian' : 'tactical');
+  });
   const [colorScheme, setColorScheme] = useState('tactical');
   const [mode, setMode] = useState<'light' | 'dark'>('dark');
   const [showLogo, setShowLogo] = useState(true);
@@ -617,6 +621,26 @@ export default function App() {
   const [ pulse, setPulse ] = useState(0);
   const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
   const [isUiTourOpen, setIsUiTourOpen] = useState(false);
+
+  // Sync state for entire interface styling (Tactical vs Civilian)
+  useEffect(() => {
+    localStorage.setItem('yardsoft_interface_style', interfaceStyle);
+    if (interfaceStyle === 'tactical') {
+      setColorScheme('tactical');
+      setMode('dark');
+      setMapMode('dark');
+      setGridBrightness(0.12);
+      setScanlineIntensity(0.3);
+      setShowAirTraffic(true);
+    } else {
+      setColorScheme('arctic'); // Perfect crisp light background with beautiful blue borders
+      setMode('light');
+      setMapMode('light'); // Positron high-contrast light map
+      setGridBrightness(0); // Totally remove target circles & coordinate overlays
+      setScanlineIntensity(0); // Totally remove CRT/scanlines blinking elements
+      setShowAirTraffic(false); // Civilian tracking disables real-time combat jets
+    }
+  }, [interfaceStyle]);
 
   useEffect(() => {
     // Auto trigger UI Tour on onboarding if not dismissed yet
@@ -952,7 +976,40 @@ export default function App() {
     };
   }, [buildingsData, filters]);
 
-  const t = translations[language];
+  const t = useMemo(() => {
+    const base = translations[language];
+    if (interfaceStyle === 'tactical') {
+      return {
+        ...base,
+        title: language === 'en' ? "YARDSOFT // OSIRIS CORES" : "YARDSOFT // ТАКТИЧЕСКИЙ КОНТУР",
+        subtitle: language === 'en' ? "Strategic OSINT Intel Hub // v4.0.2" : "Тактический Контур OSINT // v4.0.2",
+        portfolio: language === 'en' ? "Strategic Assets" : "Стратегические Активы",
+        balance: language === 'en' ? "Treasury Units" : "Казначейские Кредиты",
+        searchPlaceholder: language === 'en' ? "SCAN SATELLITE QUADRANT..." : "СКАНИРОВАТЬ ГЕО-КВАДРАНТ...",
+        aiAnalyst: language === 'en' ? "OSIRIS Tactical AI" : "ИИ-Тактик-Аналитик (ОСИРИС)",
+        aiPlaceholder: language === 'en' ? "ENTER STRATEGIC QUERY..." : "ВВЕДИТЕ ТАКТИЧЕСКИЙ ЗАПРОС...",
+        stable: language === 'en' ? "Stable Perimeter" : "Стабильный Сектор",
+        risk: language === 'en' ? "Tactical Anomaly" : "Аномальный Сигнал",
+        anomalous: language === 'en' ? "Anomalous Signal" : "Аномальный Сигнал",
+        stable_status: language === 'en' ? "Secured" : "Стабилен",
+      };
+    } else {
+      return {
+        ...base,
+        title: language === 'en' ? "YardSoft Real Estate" : "YardSoft Недвижимость",
+        subtitle: language === 'en' ? "Commercial Portfolio Analytics" : "Аналитика Коммерческого Портфеля",
+        portfolio: language === 'en' ? "My Property Portfolio" : "Мой Портфель Недвижимости",
+        balance: language === 'en' ? "Investment Balance" : "Баланс Счета",
+        searchPlaceholder: language === 'en' ? "Search properties, addresses..." : "Поиск адресов, координат...",
+        aiAnalyst: language === 'en' ? "Investment Advisor AI" : "Инвестиционный Консультант",
+        aiPlaceholder: language === 'en' ? "ASK ABOUT INVESTMENT STRATEGY..." : "СПРОСИТЕ ОБ ИНВЕСТИЦИОННОЙ СТРАТЕГИИ...",
+        stable: language === 'en' ? "High Yield Option" : "Доходный Стабильный",
+        risk: language === 'en' ? "Under Performance Risk" : "Зона Повышенного Внимания",
+        anomalous: language === 'en' ? "Volatile Action Needed" : "Рекомендуется Наблюдение",
+        stable_status: language === 'en' ? "Performing" : "Стабилен",
+      };
+    }
+  }, [language, interfaceStyle]);
 
   // Pulse timer for tactical animations
   useEffect(() => {
@@ -1933,46 +1990,50 @@ export default function App() {
       <div className="relative w-full h-screen bg-base overflow-hidden font-sans text-slate-200">
       
       {/* Cinematic Overlays */}
-      <div className="cinematic-overlay" />
-      <div className="cinematic-vignette" />
-      <TacticalHUD />
+      {interfaceStyle === 'tactical' && (
+        <>
+          <div className="cinematic-overlay" />
+          <div className="cinematic-vignette" />
+          <TacticalHUD />
 
-      {/* Tactical Alert Banner */}
-      <div className="absolute top-16 md:top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
-        <motion.div
-          initial={{ opacity: 0, y: -20 }}
-          animate={{ opacity: [0, 1, 1, 0], y: [ -20, 0, 0, -20] }}
-          transition={{ duration: 4, repeat: Infinity, repeatDelay: 10 }}
-          className="bg-white/20 border border-white/50 px-4 py-1 rounded flex items-center gap-3 backdrop-blur-sm"
-        >
-          <AlertTriangle className="w-3 h-3 text-white animate-pulse" />
-          <span className="text-[8px] font-mono font-bold text-white uppercase tracking-[0.3em]">Warning: Market_Anomaly_Detected // Sector_01</span>
-        </motion.div>
-      </div>
-
-      {/* Tactical Compass (Image 1 Inspiration) */}
-      <div className="absolute top-24 right-6 z-40 pointer-events-none hidden lg:block">
-        <div className="relative w-24 h-24">
-          <svg className="w-full h-full text-primary/20">
-            <circle cx="48" cy="48" r="46" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="4 4" />
-            <circle cx="48" cy="48" r="36" fill="none" stroke="currentColor" strokeWidth="0.5" />
-          </svg>
-          <motion.div 
-            animate={{ rotate: viewState.bearing }}
-            className="absolute inset-0 flex items-center justify-center"
-          >
-            <div className="w-px h-full bg-primary/40 absolute top-0 left-1/2" />
-            <div className="w-full h-px bg-primary/40 absolute top-1/2 left-0" />
-            <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-2 text-[8px] font-mono font-bold text-primary">N</div>
-            <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-2 text-[8px] font-mono font-bold text-slate-500">S</div>
-            <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-2 text-[8px] font-mono font-bold text-slate-500">W</div>
-            <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-2 text-[8px] font-mono font-bold text-slate-500">E</div>
-          </motion.div>
-          <div className="absolute inset-0 flex items-center justify-center">
-            <div className="w-1 h-1 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary-accent),1)]" />
+          {/* Tactical Alert Banner */}
+          <div className="absolute top-16 md:top-20 left-1/2 -translate-x-1/2 z-40 pointer-events-none">
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: [0, 1, 1, 0], y: [ -20, 0, 0, -20] }}
+              transition={{ duration: 4, repeat: Infinity, repeatDelay: 10 }}
+              className="bg-white/20 border border-white/50 px-4 py-1 rounded flex items-center gap-3 backdrop-blur-sm"
+            >
+              <AlertTriangle className="w-3 h-3 text-white animate-pulse" />
+              <span className="text-[8px] font-mono font-bold text-white uppercase tracking-[0.3em]">Warning: Market_Anomaly_Detected // Sector_01</span>
+            </motion.div>
           </div>
-        </div>
-      </div>
+
+          {/* Tactical Compass (Image 1 Inspiration) */}
+          <div className="absolute top-24 right-6 z-40 pointer-events-none hidden lg:block">
+            <div className="relative w-24 h-24">
+              <svg className="w-full h-full text-primary/20">
+                <circle cx="48" cy="48" r="46" fill="none" stroke="currentColor" strokeWidth="1" strokeDasharray="4 4" />
+                <circle cx="48" cy="48" r="36" fill="none" stroke="currentColor" strokeWidth="0.5" />
+              </svg>
+              <motion.div 
+                animate={{ rotate: viewState.bearing }}
+                className="absolute inset-0 flex items-center justify-center"
+              >
+                <div className="w-px h-full bg-primary/40 absolute top-0 left-1/2" />
+                <div className="w-full h-px bg-primary/40 absolute top-1/2 left-0" />
+                <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-2 text-[8px] font-mono font-bold text-primary">N</div>
+                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 translate-y-2 text-[8px] font-mono font-bold text-slate-500">S</div>
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 -translate-x-2 text-[8px] font-mono font-bold text-slate-500">W</div>
+                <div className="absolute right-0 top-1/2 -translate-y-1/2 translate-x-2 text-[8px] font-mono font-bold text-slate-500">E</div>
+              </motion.div>
+              <div className="absolute inset-0 flex items-center justify-center">
+                <div className="w-1 h-1 bg-primary rounded-full shadow-[0_0_10px_rgba(var(--primary-accent),1)]" />
+              </div>
+            </div>
+          </div>
+        </>
+      )}
 
       {/* Logo Splash */}
       <AnimatePresence>
@@ -2254,6 +2315,42 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-3">
+            {/* Style Selector Pill Widget */}
+            <div className="framer-glass flex items-center p-0.5 rounded-full border border-white/10 select-none mr-1">
+              <button
+                onClick={() => {
+                  setInterfaceStyle('tactical');
+                  soundService.playSonar();
+                }}
+                className={cn(
+                  "flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider transition-all",
+                  interfaceStyle === 'tactical'
+                    ? "bg-red-600 text-white font-extrabold shadow-[0_0_12px_rgba(239,68,68,0.4)]"
+                    : "text-slate-400 hover:text-slate-200"
+                )}
+                title="Tactical OSINT Operations HUD"
+              >
+                <Shield className="w-2.5 h-2.5" />
+                <span className="hidden xs:inline">Tactical HUD</span>
+              </button>
+              <button
+                onClick={() => {
+                  setInterfaceStyle('civilian');
+                  soundService.playClick();
+                }}
+                className={cn(
+                  "flex items-center gap-1 px-2.5 py-1 rounded-full text-[9px] font-bold uppercase tracking-wider transition-all",
+                  interfaceStyle === 'civilian'
+                    ? "bg-emerald-600 text-white font-extrabold shadow-[0_0_12px_rgba(16,185,129,0.4)]"
+                    : "text-slate-400 hover:text-slate-600"
+                )}
+                title="Civilian Asset Advisory Dashboard"
+              >
+                <TrendingUp className="w-2.5 h-2.5" />
+                <span className="hidden xs:inline">Civilian Panel</span>
+              </button>
+            </div>
+
             <button 
               onClick={() => setIsReconPanelOpen(!isReconPanelOpen)}
               className={`framer-glass w-8 h-8 rounded-full flex items-center justify-center glass-hover transition-all ${isReconPanelOpen ? 'text-cyan-400 border border-cyan-500/40' : 'text-white/50 hover:text-white'}`}
