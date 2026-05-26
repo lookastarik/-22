@@ -6,8 +6,12 @@ import {
   PathLayer, 
   ScatterplotLayer, 
   PolygonLayer,
+  GeoJsonLayer,
 } from '@deck.gl/layers';
 import { createBuildingsLayer } from './layers/buildings';
+import { animateCamera, CAMERA_PRESETS } from './camera/cinematicController';
+import { generateFullIsochroneGeoJSON } from './recon/isochroneGenerator';
+import { ReconPanel } from './recon/ReconPanel';
 import { GoogleGenAI, Type } from "@google/genai";
 import { auth } from './firebase';
 import { 
@@ -70,7 +74,8 @@ import {
   Layers as LayersIcon,
   MousePointer2,
   Navigation,
-  RotateCw
+  RotateCw,
+  Activity
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -83,6 +88,9 @@ import { GeospatialEditor } from './admin/GeospatialEditor';
 import { AdminAssetCreator } from './admin/AdminAssetCreator';
 import { BulkImportEngine } from './admin/BulkImportEngine';
 import { soundService } from './services/soundService';
+import { UITourWalkthrough } from './components/UITourWalkthrough';
+import { adsbStream, FlightState } from './services/osint/adsbStream';
+import { createAirTrafficLayer } from './layers/airTraffic';
 
 // Types
 interface BuildingInfo {
@@ -546,6 +554,17 @@ export default function App() {
   const [hoverWetland, setHoverWetland] = useState<any>(null);
   const [hoverInfra, setHoverInfra] = useState<any>(null);
 
+  // OSINT Air Traffic States
+  const [flights, setFlights] = useState<FlightState[]>([]);
+  const [showAirTraffic, setShowAirTraffic] = useState(true);
+  const [hoverFlight, setHoverFlight] = useState<any>(null);
+
+  // Terrain Recon Suite states
+  const [isReconPanelOpen, setIsReconPanelOpen] = useState(false);
+  const [showIsochrones, setShowIsochrones] = useState(false);
+  const [travelMode, setTravelMode] = useState<'walk' | 'bike' | 'drive'>('walk');
+  const [selectedYear, setSelectedYear] = useState<number>(2026);
+
   // Admin Creation Suite states
   const [geospatialEditorActive, setGeospatialEditorActive] = useState(false);
   const [drawnVertices, setDrawnVertices] = useState<[number, number][]>([]);
@@ -597,6 +616,18 @@ export default function App() {
   const [isSearching, setIsSearching] = useState(false);
   const [ pulse, setPulse ] = useState(0);
   const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
+  const [isUiTourOpen, setIsUiTourOpen] = useState(false);
+
+  useEffect(() => {
+    // Auto trigger UI Tour on onboarding if not dismissed yet
+    const hasSeenTour = localStorage.getItem('yardsoft_aegis_tour_dismissed');
+    if (!hasSeenTour) {
+      const timer = setTimeout(() => {
+        setIsUiTourOpen(true);
+      }, 1500);
+      return () => clearTimeout(timer);
+    }
+  }, []);
 
   const [authStatusMessage, setAuthStatusMessage] = useState<{ text: string, type: 'error' | 'success' | 'info' } | null>(null);
 
@@ -965,12 +996,170 @@ export default function App() {
     return null;
   }, [buildingsData]);
 
+  // Keep viewState up-to-date in reference to prevent any dependency rebuild loop
+  const viewStateRef = React.useRef(viewState);
+  useEffect(() => {
+    viewStateRef.current = viewState;
+  }, [viewState]);
+
+  const cameraAnimRef = React.useRef<() => void>(null);
+
+  // Smooth cinematic fly to transition helper
+  const cleanFlyToCinematic = useCallback((
+    targetLng: number,
+    targetLat: number,
+    targetZoom?: number,
+    targetPitch?: number,
+    targetBearing?: number,
+    duration: number = 2450,
+    easing: any = 'cinematic'
+  ) => {
+    // Disable active drone orbit if flying
+    setIsFlyoverActive(false);
+
+    // Cancel current active camera transition
+    if (cameraAnimRef.current) {
+      cameraAnimRef.current();
+    }
+
+    cameraAnimRef.current = animateCamera(
+      {
+        longitude: viewStateRef.current.longitude,
+        latitude: viewStateRef.current.latitude,
+        zoom: viewStateRef.current.zoom,
+        pitch: viewStateRef.current.pitch,
+        bearing: viewStateRef.current.bearing
+      },
+      {
+        longitude: targetLng,
+        latitude: targetLat,
+        zoom: targetZoom,
+        pitch: targetPitch,
+        bearing: targetBearing
+      },
+      duration,
+      easing,
+      (nextPose) => {
+        setViewState(nextPose);
+      },
+      () => {
+        cameraAnimRef.current = null;
+      }
+    );
+  }, []);
+
+  // Automatic Cinematic Snap on Building Selection
+  useEffect(() => {
+    if (selectedBuilding) {
+      const center = getBuildingCenter(selectedBuilding.id);
+      if (center) {
+        const height = selectedBuilding.properties?.height || 55;
+        const optimalZoom = Math.min(18.0, 16.5 + Math.log2(height / 40));
+        const optimalPitch = Math.min(75, 55 + height / 10);
+        
+        // Beautiful framing offsets
+        const offsetLng = -0.00015;
+        const offsetLat = 0.0001;
+
+        cleanFlyToCinematic(
+          center[0] + offsetLng,
+          center[1] + offsetLat,
+          optimalZoom,
+          optimalPitch,
+          35, // bearing
+          2600, // beautiful 2.6s cinematic glide
+          'cinematic'
+        );
+      }
+    }
+  }, [selectedBuilding, cleanFlyToCinematic, getBuildingCenter]);
+
+  // Keyboard Hotkeys Listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore when typing within input/textareas
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+
+      const key = e.key.toUpperCase();
+
+      if (key === 'R') {
+        e.preventDefault();
+        soundService.playClick();
+        setIsReconPanelOpen(prev => !prev);
+      } else if (key === 'O') {
+        e.preventDefault();
+        soundService.playSonar();
+        setIsFlyoverActive(prev => !prev);
+      } else if (key === 'F') {
+        e.preventDefault();
+        if (selectedBuilding) {
+          soundService.playSonar();
+          const center = getBuildingCenter(selectedBuilding.id);
+          if (center) {
+            cleanFlyToCinematic(center[0], center[1], 17.5, 65, 35, 2500, 'cinematic');
+          }
+        }
+      } else if (key === 'N') {
+        e.preventDefault();
+        soundService.playClick();
+        setViewState(prev => ({ ...prev, bearing: 0 }));
+      } else if (key === 'L') {
+        e.preventDefault();
+        soundService.playClick();
+        setViewState(prev => ({ ...prev, pitch: 0 }));
+      } else if (key === 'H') {
+        e.preventDefault();
+        soundService.playSonar();
+        setSelectedYear(prev => {
+          if (prev === 2010) return 2015;
+          if (prev === 2015) return 2020;
+          if (prev === 2020) return 2026;
+          return 2010;
+        });
+      } else if (['1', '2', '3', '4', '5'].includes(e.key)) {
+        e.preventDefault();
+        const presetIdx = parseInt(e.key) - 1;
+        const preset = CAMERA_PRESETS[presetIdx];
+        if (preset) {
+          soundService.playSonar();
+          if (selectedBuilding) {
+            const center = getBuildingCenter(selectedBuilding.id);
+            if (center) {
+              cleanFlyToCinematic(center[0], center[1], preset.zoom, preset.pitch, preset.bearing);
+              return;
+            }
+          }
+          cleanFlyToCinematic(37.6173, 55.7558, preset.zoom, preset.pitch, preset.bearing);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedBuilding, cleanFlyToCinematic, getBuildingCenter]);
+
   // Turn-off flyover when modal/selection is closed
   useEffect(() => {
     if (!selectedBuilding) {
       setIsFlyoverActive(false);
     }
   }, [selectedBuilding]);
+
+  // OSINT ADS-B Air Traffic Stream subscription and connection
+  useEffect(() => {
+    adsbStream.connect();
+    const unsubscribe = adsbStream.subscribe((updatedFlights) => {
+      setFlights(updatedFlights);
+    });
+
+    return () => {
+      unsubscribe();
+      adsbStream.disconnect();
+    };
+  }, []);
 
   // Land id 3D Flyover Tour Engine Effect
   useEffect(() => {
@@ -1445,8 +1634,39 @@ export default function App() {
       updateTriggers: {
         getColor: [viewState.latitude, viewState.longitude]
       }
-    })
-  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, measurementMode, measurePoints, showParcels, showSoils, showWetlands, showInfrastructure, geospatialEditorActive, drawnVertices, viewState.latitude, viewState.longitude]);
+    }),
+
+    // Simulated Isochrone rings Layer
+    showIsochrones && selectedBuilding && getBuildingCenter(selectedBuilding.id) && new GeoJsonLayer({
+      id: 'isochrones-layer',
+      data: generateFullIsochroneGeoJSON(getBuildingCenter(selectedBuilding.id)!, travelMode),
+      pickable: true,
+      stroked: true,
+      filled: true,
+      extruded: false,
+      getFillColor: (f: any) => {
+        const mins = f.properties.minutes;
+        if (mins === 5) return [16, 185, 129, 35];   // 5 min - emerald (translucent)
+        if (mins === 10) return [245, 158, 11, 25];  // 10 min - amber
+        return [239, 68, 68, 15];                    // 15 min - rose
+      },
+      getLineColor: (f: any) => {
+        const mins = f.properties.minutes;
+        if (mins === 5) return [16, 185, 129, 110];
+        if (mins === 10) return [245, 158, 11, 90];
+        return [239, 68, 68, 70];
+      },
+      getLineWidth: 2,
+      lineWidthMinPixels: 1.5,
+      updateTriggers: {
+        getFillColor: [selectedBuilding, travelMode],
+        getLineColor: [selectedBuilding, travelMode]
+      }
+    }),
+
+    // OSINT Air Traffic Layers (Trips, points, texts)
+    ...createAirTrafficLayer(flights, (info) => setHoverFlight(info), userRole, showAirTraffic)
+  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, measurementMode, measurePoints, showParcels, showSoils, showWetlands, showInfrastructure, geospatialEditorActive, drawnVertices, viewState.latitude, viewState.longitude, showIsochrones, travelMode, getBuildingCenter, flights, showAirTraffic, userRole]);
 
   const handleBuyBuilding = async (id: number, cost: number, yieldAmount: number) => {
     if (balance >= cost && !portfolio.includes(id)) {
@@ -2035,6 +2255,14 @@ export default function App() {
 
           <div className="flex items-center gap-2 sm:gap-3">
             <button 
+              onClick={() => setIsReconPanelOpen(!isReconPanelOpen)}
+              className={`framer-glass w-8 h-8 rounded-full flex items-center justify-center glass-hover transition-all ${isReconPanelOpen ? 'text-cyan-400 border border-cyan-500/40' : 'text-white/50 hover:text-white'}`}
+              title="Terrain Recon Suite (R)"
+            >
+              <Activity className="w-3.5 h-3.5 animate-pulse" />
+            </button>
+
+            <button 
               onClick={handleExportCSV}
               className="framer-glass w-8 h-8 rounded-full flex items-center justify-center glass-hover transition-all text-white/50 hover:text-white"
               title="Export Map Data (CSV)"
@@ -2190,6 +2418,18 @@ export default function App() {
                     </span>
                   </div>
                 </div>
+
+                {/* UI Tour Walkthrough Activator */}
+                <button 
+                  onClick={() => {
+                    soundService.playSonar();
+                    setIsUiTourOpen(true);
+                  }}
+                  className="hidden sm:flex ml-2 border border-cyan-500/40 bg-cyan-500/10 pl-3 pr-4 py-1.5 items-center gap-2 rounded-xl text-cyan-400 hover:bg-cyan-500/20 transition-all uppercase font-mono tracking-widest text-[9px] font-bold shadow-[0_0_15px_rgba(6,182,212,0.2)] active:scale-95 cursor-pointer pointer-events-auto animate-pulse"
+                >
+                  <Command className="w-3.5 h-3.5" />
+                  <span>{language === 'ru' ? 'ИНФО_ТУР' : 'UI_TOUR'}</span>
+                </button>
 
                 {/* Console System Activator */}
                 <button 
@@ -2402,6 +2642,20 @@ export default function App() {
                         </div>
                         {showInfrastructure ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
                       </button>
+                      <button
+                        onClick={() => setShowAirTraffic(!showAirTraffic)}
+                        className={cn(
+                          "w-full flex items-center justify-between px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all",
+                          showAirTraffic ? "bg-primary/20 text-primary" : "text-slate-400 hover:bg-white/5"
+                        )}
+                        title="ADS-B Live Air Traffic Layer"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Navigation className="w-3.5 h-3.5 text-red-500 animate-pulse" />
+                          {language === 'en' ? "OSINT Air Traffic" : "ОСИНТ Авиатрафик"}
+                        </div>
+                        {showAirTraffic ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
                     </div>
                   </motion.div>
                 )}
@@ -2462,28 +2716,77 @@ export default function App() {
           </div>
 
           {/* Zoom Controls */}
-          <div className="flex flex-col items-end gap-4">
-            <div className="flex flex-col tactical-glass energy-border rounded-xl overflow-hidden shadow-xl pointer-events-auto">
+          <div className="flex flex-col items-end gap-4 z-[120]">
+            <div className="flex flex-col apple-glass-dark border border-white/20 rounded-xl p-1.5 gap-1.5 shadow-[0_0_30px_rgba(0,0,0,0.8)] backdrop-blur-xl bg-black/80 pointer-events-auto">
+              {/* Zoom In */}
               <button 
-                onClick={() => setViewState(v => ({ ...v, zoom: v.zoom + 1 }))}
-                className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
+                onClick={() => {
+                  setViewState(v => ({ ...v, zoom: Math.min(v.zoom + 1, 20) }));
+                  soundService.playClick();
+                }}
+                className="w-10 h-10 bg-white/5 hover:bg-white/20 border border-white/10 hover:border-cyan-500/50 rounded-lg flex items-center justify-center text-white hover:text-cyan-400 transition-all active:scale-95 group"
                 title="Zoom In"
               >
-                <Plus className="w-5 h-5" />
+                <Plus className="w-4 h-4 group-hover:drop-shadow-[0_0_8px_rgba(6,182,212,0.8)]" />
               </button>
+              
+              {/* Zoom Out */}
               <button 
-                onClick={() => setViewState(v => ({ ...v, zoom: v.zoom - 1 }))}
-                className="p-3 hover:bg-slate-800 transition-colors border-b border-slate-800 text-slate-400"
+                onClick={() => {
+                  setViewState(v => ({ ...v, zoom: Math.max(v.zoom - 1, 1) }));
+                  soundService.playClick();
+                }}
+                className="w-10 h-10 bg-white/5 hover:bg-white/20 border border-white/10 hover:border-cyan-500/50 rounded-lg flex items-center justify-center text-white hover:text-cyan-400 transition-all active:scale-95 group"
                 title="Zoom Out"
               >
-                <Minus className="w-5 h-5" />
+                <Minus className="w-4 h-4 group-hover:drop-shadow-[0_0_8px_rgba(6,182,212,0.8)]" />
               </button>
+              
+              <div className="h-px bg-white/10 mx-2" />
+              
+              {/* Tilt Up */}
               <button 
-                onClick={() => setViewState(v => ({ ...v, pitch: 60, bearing: -20 }))}
-                className="p-3 hover:bg-slate-800 transition-colors text-slate-400"
-                title="Reset View"
+                onClick={() => {
+                  setViewState(v => ({ ...v, pitch: Math.min(v.pitch + 15, 85) }));
+                  soundService.playClick();
+                }}
+                className="w-10 h-10 bg-white/5 hover:bg-white/20 border border-white/10 hover:border-cyan-500/50 rounded-lg flex items-center justify-center text-white hover:text-cyan-400 transition-all active:scale-95 group"
+                title="Tilt Up"
               >
-                <RotateCcw className="w-5 h-5" />
+                <ChevronUp className="w-4 h-4 group-hover:drop-shadow-[0_0_8px_rgba(6,182,212,0.8)]" />
+              </button>
+              
+              {/* Tilt Down */}
+              <button 
+                onClick={() => {
+                  setViewState(v => ({ ...v, pitch: Math.max(v.pitch - 15, 0) }));
+                  soundService.playClick();
+                }}
+                className="w-10 h-10 bg-white/5 hover:bg-white/20 border border-white/10 hover:border-cyan-500/50 rounded-lg flex items-center justify-center text-white hover:text-cyan-400 transition-all active:scale-95 group"
+                title="Tilt Down"
+              >
+                <ChevronDown className="w-4 h-4 group-hover:drop-shadow-[0_0_8px_rgba(6,182,212,0.8)]" />
+              </button>
+              
+              <div className="h-px bg-white/10 mx-2" />
+              
+              {/* Reset Navigation */}
+              <button 
+                onClick={() => {
+                  setViewState(v => ({ 
+                    ...v, 
+                    pitch: 60, 
+                    bearing: -20, 
+                    zoom: 15.5,
+                    latitude: 55.7558,
+                    longitude: 37.6173
+                  }));
+                  soundService.playSonar();
+                }}
+                className="w-10 h-10 bg-cyan-950/20 hover:bg-cyan-950/40 border border-cyan-800/40 hover:border-cyan-500/60 rounded-lg flex items-center justify-center text-cyan-400 transition-all active:scale-95 group"
+                title="Reset Navigation"
+              >
+                <RotateCcw className="w-4 h-4 group-hover:animate-spin" />
               </button>
             </div>
           </div>
@@ -3372,6 +3675,81 @@ export default function App() {
             </div>
           </motion.div>
         )}
+
+        {/* Real-time ADSB Flight Telemetry Overlay Tooltip */}
+        {hoverFlight && hoverFlight.x !== undefined && hoverFlight.y !== undefined && (
+          <motion.div
+            initial={{ opacity: 0, scale: 0.95, y: 5 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.95, y: 5 }}
+            transition={{ duration: 0.1 }}
+            style={{ 
+              left: hoverFlight.x + 12, 
+              top: hoverFlight.y + 12,
+              position: 'absolute'
+            }}
+            className={cn(
+              "pointer-events-none z-[125] bg-zinc-950/95 border text-white px-3 py-2.5 rounded-lg backdrop-blur-md shadow-2xl min-w-[240px]",
+              hoverFlight.properties.category === 'MILITARY' ? "border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.25)]" :
+              hoverFlight.properties.category === 'GOV' ? "border-purple-500/50 shadow-[0_0_15px_rgba(168,85,247,0.25)]" :
+              hoverFlight.properties.category === 'VIP_JET' ? "border-yellow-500/50 shadow-[0_0_15px_rgba(234,179,8,0.25)]" :
+              "border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.25)]"
+            )}
+          >
+            <div className="flex flex-col gap-1.5 font-mono">
+              <div className="flex items-center justify-between border-b border-white/10 pb-1.5 mb-1.5">
+                <div className="flex items-center gap-1.5">
+                  <Radar className={cn(
+                    "w-3.5 h-3.5",
+                    hoverFlight.properties.category === 'MILITARY' ? "text-red-400" :
+                    hoverFlight.properties.category === 'GOV' ? "text-purple-400" :
+                    hoverFlight.properties.category === 'VIP_JET' ? "text-yellow-400" :
+                    "text-cyan-400"
+                  )} />
+                  <span className="text-[10px] font-bold tracking-wider text-slate-300">OSINT Telemetry</span>
+                </div>
+                <span className={cn(
+                  "text-[8px] px-1 py-0.5 rounded font-bold uppercase",
+                  hoverFlight.properties.category === 'MILITARY' ? "bg-red-500/20 text-red-300 border border-red-500/30" :
+                  hoverFlight.properties.category === 'GOV' ? "bg-purple-500/20 text-purple-300 border border-purple-500/30" :
+                  hoverFlight.properties.category === 'VIP_JET' ? "bg-yellow-500/20 text-yellow-300 border border-yellow-500/30" :
+                  "bg-cyan-500/20 text-cyan-300 border border-cyan-500/30"
+                )}>
+                  {hoverFlight.properties.category}
+                </span>
+              </div>
+              
+              <div className="flex justify-between items-center text-xs border-b border-white/5 pb-1">
+                <span className="text-slate-400">CALLSIGN</span>
+                <span className="font-bold text-white tracking-widest">{hoverFlight.properties.callsign}</span>
+              </div>
+
+              <div className="flex justify-between items-center text-xs border-b border-white/5 pb-1">
+                <span className="text-slate-400">ICAO HEX</span>
+                <span className="text-slate-200">{hoverFlight.properties.icao}</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[10px] mt-1">
+                <div className="flex justify-between col-span-1">
+                  <span className="text-slate-500">ALT:</span>
+                  <span className="text-emerald-400 font-bold">{hoverFlight.properties.altitude} m</span>
+                </div>
+                <div className="flex justify-between col-span-1">
+                  <span className="text-slate-500">SPD:</span>
+                  <span className="text-cyan-400">{hoverFlight.properties.speed} km/h</span>
+                </div>
+                <div className="flex justify-between col-span-1">
+                  <span className="text-slate-500">LAT:</span>
+                  <span className="text-slate-330">{hoverFlight.properties.latitude.toFixed(4)}</span>
+                </div>
+                <div className="flex justify-between col-span-1">
+                  <span className="text-slate-500">LON:</span>
+                  <span className="text-slate-330">{hoverFlight.properties.longitude.toFixed(4)}</span>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+        )}
       </AnimatePresence>
 
       {/* Cyber-Tactical Cabinets Layer */}
@@ -3448,6 +3826,65 @@ export default function App() {
           />
         )}
       </AnimatePresence>
+
+      {/* Terrain Recon Suite Sidebar Drawer */}
+      <AnimatePresence>
+        {isReconPanelOpen && (
+          <motion.div
+            initial={{ opacity: 0, x: 360 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 360 }}
+            transition={{ type: 'spring', damping: 20, stiffness: 100 }}
+            className="fixed top-0 right-0 h-full w-[360px] z-[80] shadow-[0_0_50px_rgba(0,0,0,0.8)] flex flex-col pointer-events-auto"
+          >
+            <ReconPanel
+              selectedBuilding={selectedBuilding}
+              onClose={() => setIsReconPanelOpen(false)}
+              language={language}
+              showIsochrones={showIsochrones}
+              setShowIsochrones={setShowIsochrones}
+              travelMode={travelMode}
+              setTravelMode={setTravelMode}
+              onFlyTo={(lng, lat, zoom, pitch, bearing) => cleanFlyToCinematic(lng, lat, zoom, pitch, bearing)}
+              onApplyPreset={(presetId) => {
+                let preset;
+                if (presetId === 'bird-eye') preset = CAMERA_PRESETS[0];
+                else if (presetId === 'drone') preset = CAMERA_PRESETS[1];
+                else if (presetId === 'street') preset = CAMERA_PRESETS[2];
+                else if (presetId === 'orbit') preset = CAMERA_PRESETS[3];
+                else if (presetId === 'strategic') preset = CAMERA_PRESETS[4];
+                if (preset) {
+                  if (selectedBuilding) {
+                    const center = getBuildingCenter(selectedBuilding.id);
+                    if (center) {
+                      cleanFlyToCinematic(center[0], center[1], preset.zoom, preset.pitch, preset.bearing);
+                      return;
+                    }
+                  }
+                  cleanFlyToCinematic(viewState.longitude, viewState.latitude, preset.zoom, preset.pitch, preset.bearing);
+                }
+              }}
+              selectedYear={selectedYear}
+              setSelectedYear={setSelectedYear}
+              userRole={userRole}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* UI Tour Walkthrough Onboarding (YardSoft Aegis) */}
+      <UITourWalkthrough
+        isOpen={isUiTourOpen}
+        onClose={() => {
+          localStorage.setItem('yardsoft_aegis_tour_dismissed', 'true');
+          setIsUiTourOpen(false);
+        }}
+        language={language}
+        onSetSimRole={(role) => handleLogin(role)}
+        onToggleCabinet={(open) => setInvestorCabinetOpen(open)}
+        onSetSelectedBuilding={(b) => setSelectedBuilding(b)}
+        onSetIsFlyoverActive={(active) => setIsFlyoverActive(active)}
+      />
     </div>
     </AppErrorBoundary>
   );

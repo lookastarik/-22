@@ -99,6 +99,32 @@ class SoundService {
       console.warn('Audio feedback failed:', e);
     }
   }
+
+  // Quick tactile tick/click sound
+  playClick() {
+    const ctx = this.getContext();
+    if (!ctx) return;
+    try {
+      const time = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(1200, time);
+      osc.frequency.exponentialRampToValueAtTime(300, time + 0.05);
+
+      gain.gain.setValueAtTime(0.08, time);
+      gain.gain.exponentialRampToValueAtTime(0.01, time + 0.05);
+
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+
+      osc.start(time);
+      osc.stop(time + 0.05);
+    } catch (e) {
+      // noop
+    }
+  }
 }
 
 export const soundService = new SoundService();

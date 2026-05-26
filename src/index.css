@@ -239,3 +239,32 @@
     to { transform: translateY(100vh); }
   }
 }
+
+/* FIX: Prevent HUD overlays from blocking map controls */
+.tactical-grid,
+.map-scanline,
+.digital-map-overlay,
+.scanline-anim,
+.screen-scan-overlay,
+.cinematic-overlay,
+.cinematic-vignette {
+  /* Разрешаем клики сквозь декоративные слои */
+  pointer-events: none !important;
+}
+
+/* Гарантируем, что контейнер контролов всегда кликабелен */
+[class*="Zoom Controls"] > div,
+[class*="Numerical Map Controls"] > div,
+.absolute.right-4.top-1\/2.-translate-y-1\/2 {
+  pointer-events: auto !important;
+  position: relative;
+  z-index: 120 !important;
+}
+
+/* Усиленная видимость кнопок при наведении */
+.apple-glass-dark button:hover {
+  background: rgba(255, 255, 255, 0.15) !important;
+  border-color: rgba(6, 182, 212, 0.5) !important;
+  box-shadow: 0 0 15px rgba(6, 182, 212, 0.3);
+}
+
