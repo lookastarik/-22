@@ -261,10 +261,95 @@
   z-index: 120 !important;
 }
 
-/* Усиленная видимость кнопок при наведении */
-.apple-glass-dark button:hover {
-  background: rgba(255, 255, 255, 0.15) !important;
-  border-color: rgba(6, 182, 212, 0.5) !important;
-  box-shadow: 0 0 15px rgba(6, 182, 212, 0.3);
+/* Tactical Satellite Map View Filtering */
+.satellite-map-filter .maplibregl-map {
+  filter: grayscale(100%) contrast(150%) brightness(80%) invert(100%);
 }
+.satellite-map-filter .maplibregl-control-container {
+  display: none !important;
+}
+
+/* HIGH-CONTRAST READABILITY ENHANCEMENTS ACROSS ALL INTERFACE STYLES / THEMES */
+
+/* 1. Global Light Mode (Civilian Mode & Arctic Theme) legibility rules */
+[data-mode='light'] {
+  --text-main: #090d16 !important; /* Premium ultra-dark navy for absolute clarity */
+  --text-muted: #273549 !important; /* Premium steel dark blue for subheaders */
+}
+
+/* Force light gray Tailwind text elements to become high contrast deep colored */
+[data-mode='light'] .text-slate-400,
+[data-mode='light'] .text-slate-500,
+[data-mode='light'] .text-slate-600,
+[data-mode='light'] .text-neutral-400,
+[data-mode='light'] .text-neutral-500,
+[data-mode='light'] .text-zinc-400,
+[data-mode='light'] .text-zinc-500,
+[data-mode='light'] .text-white\/40,
+[data-mode='light'] .text-white\/50,
+[data-mode='light'] .text-white\/60,
+[data-mode='light'] .text-white\/70,
+[data-mode='light'] .text-white\/80 {
+  color: #1e293b !important; /* Slate 800 - extremely sharp for descriptors and metadata */
+}
+
+[data-mode='light'] .text-slate-300,
+[data-mode='light'] .text-slate-200,
+[data-mode='light'] .text-slate-100,
+[data-mode='light'] .text-zinc-300,
+[data-mode='light'] .text-zinc-200,
+[data-mode='light'] .text-zinc-100 {
+  color: #0f172a !important; /* Slate 900 for high priority elements */
+}
+
+[data-mode='light'] .text-white,
+[data-mode='light'] .text-slate-200,
+[data-mode='light'] .text-slate-100 {
+  color: #020617 !important; /* Premium Slate 950 black for headings */
+}
+
+/* Increase contrast for borders and divider lines in light mode to define sections sharply */
+[data-mode='light'] .border-white\/10,
+[data-mode='light'] .border-white\/5,
+[data-mode='light'] .border-slate-800\/20,
+[data-mode='light'] .border-zinc-800\/10 {
+  border-color: rgba(15, 23, 42, 0.15) !important;
+}
+
+[data-mode='light'] .framer-glass {
+  background: rgba(255, 255, 255, 0.88) !important; /* Increase opacity of glass cards for a much safer backdrop contrast */
+  backdrop-filter: blur(24px) !important;
+  border-width: 1px !important;
+  border-color: rgba(15, 23, 42, 0.1) !important;
+  box-shadow: 0 10px 30px -5px rgba(2, 6, 23, 0.08) !important;
+}
+
+
+/* 2. Global Dark Mode (Tactical & Dark themes) legibility rules */
+[data-mode='dark'] {
+  --text-main: #f8fafc !important; /* Clean premium high-brightness off-white */
+  --text-muted: #cbd5e1 !important; /* Slate 300 - high brightness slate for secondary info */
+}
+
+/* Elevate gray levels of standard text elements to make details easily decipherable under dark environments */
+[data-mode='dark'] .text-slate-400,
+[data-mode='dark'] .text-slate-500,
+[data-mode='dark'] .text-zinc-400,
+[data-mode='dark'] .text-zinc-500,
+[data-mode='dark'] .text-white\/40,
+[data-mode='dark'] .text-white\/50,
+[data-mode='dark'] .text-white\/60 {
+  color: #cbd5e1 !important; /* Bring up to high-contrast slate-300 so it can be read without strain */
+}
+
+[data-mode='dark'] .framer-glass {
+  background: rgba(10, 10, 12, 0.85) !important; /* Higher background darkness of glass cards for sharper readable contrast */
+  backdrop-filter: blur(24px) !important;
+}
+
+/* Add custom soft dropshadow layers underneath icons and small tactical readings to give them pop */
+.font-mono {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+}
+
 

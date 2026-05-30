@@ -163,3 +163,157 @@ export const createBuildingsLayer = (
 
   return layers;
 };
+
+export const createRoiBuildingsLayer = (
+  data: any,
+  onHover: (info: any) => void, 
+  onClick: (info: any) => void, 
+  pulse: number = 0,
+  selectedId: number | null = null,
+  zoom: number = 15
+) => {
+  const isVeryLowDetail = zoom < 11;
+  const isLowDetail = zoom >= 11 && zoom < 13;
+  const isMediumDetail = zoom >= 13 && zoom < 15;
+  const isHighDetail = zoom >= 15;
+
+  let optimizedData = data;
+  
+  if (data && data.features) {
+    if (isVeryLowDetail) {
+      optimizedData = {
+        ...data,
+        features: data.features.filter((f: any) => 
+          f.properties.id === selectedId || f.properties.status >= 2 || (f.properties.cost && f.properties.cost > 500000000)
+        )
+      };
+    } else if (isLowDetail) {
+      optimizedData = {
+        ...data,
+        features: data.features.filter((f: any) => 
+          f.properties.id === selectedId || f.properties.status >= 2 || (f.properties.cost && f.properties.cost > 100000000)
+        )
+      };
+    }
+  }
+
+  const layers = [
+    new GeoJsonLayer({
+      id: 'buildings-roi',
+      data: optimizedData,
+      pickable: zoom >= 13,
+      autoHighlight: isHighDetail,
+      highlightColor: [255, 255, 255, 60],
+      stroked: true,
+      lineWidthMinPixels: 1,
+      filled: true,
+      extruded: !isVeryLowDetail && !isLowDetail,
+      
+      getElevation: (f: any) => {
+        if (isVeryLowDetail || isLowDetail) return 0;
+        const height = f?.properties?.height || 20;
+        if (f?.properties?.id === selectedId) return height * 1.5;
+        return height * 1.1;
+      },
+
+      getLineColor: (f: any) => {
+        const id = f?.properties?.id;
+        if (id === selectedId) {
+          return [255, 191, 0, 220 + 35 * pulse]; // Active Gold for highlight
+        }
+        const roi = f?.properties?.roi !== undefined ? f.properties.roi : 10;
+        if (roi < 5) return [239, 68, 68, 140];      // Crimson Red for <5%
+        if (roi <= 15) return [245, 158, 11, 140];    // Amber/Yellow for 5-15%
+        return [34, 197, 94, 180];                    // Neon Green for >15%
+      },
+
+      getLineWidth: (f: any) => {
+        const id = f?.properties?.id;
+        if (id === selectedId) return 3;
+        return 1;
+      },
+
+      getFillColor: (f: any) => {
+        const props = f?.properties || {};
+        const id = props.id;
+        
+        if (id === selectedId) {
+          return [255, 191, 0, 140 + 50 * pulse]; // Active Gold semi-transparent
+        }
+
+        const roi = props.roi !== undefined ? props.roi : 10;
+        if (roi < 5) {
+          return [239, 68, 68, 160]; // Red
+        } else if (roi <= 15) {
+          return [245, 158, 11, 160]; // Yellow/Amber
+        } else {
+          return [34, 197, 94, 185]; // Green/Neon
+        }
+      },
+
+      onHover: (info: any) => {
+        if (zoom < 13) return; 
+        if (info.object) {
+          onHover({
+            id: info.object.properties.id,
+            x: info.x,
+            y: info.y,
+            properties: info.object.properties
+          });
+        } else {
+          onHover(null);
+        }
+      },
+
+      onClick: (info: any) => {
+        if (zoom < 13) return; 
+        if (info.object) {
+          onClick({
+            id: info.object.properties.id,
+            properties: info.object.properties
+          });
+        }
+      },
+
+      updateTriggers: {
+        getFillColor: [pulse, selectedId, zoom],
+        getLineColor: [pulse, selectedId, zoom],
+        getLineWidth: [pulse, selectedId, zoom],
+        getElevation: [zoom, selectedId],
+        extruded: [zoom]
+      },
+
+      transitions: {
+        getElevation: {
+          duration: 600,
+          easing: (t: number) => t * (2 - t),
+          type: 'interpolation'
+        }
+      }
+    } as any)
+  ];
+
+  if (selectedId !== null && isHighDetail) {
+    layers.push(
+      new GeoJsonLayer({
+        id: 'roi-selection-glow',
+        data: {
+          type: 'FeatureCollection',
+          features: data.features.filter((f: any) => f.properties.id === selectedId)
+        },
+        extruded: true,
+        filled: false,
+        stroked: true,
+        lineWidthMinPixels: 4,
+        getElevation: (f: any) => (f?.properties?.height || 20) * 1.15,
+        getLineColor: [255, 191, 0, 150 + 105 * pulse], // Pulsing Active Gold glow
+        getLineWidth: 6,
+        updateTriggers: {
+          getLineColor: [pulse]
+        }
+      } as any)
+    );
+  }
+
+  return layers;
+};

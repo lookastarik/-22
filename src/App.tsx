@@ -8,7 +8,7 @@ import {
   PolygonLayer,
   GeoJsonLayer,
 } from '@deck.gl/layers';
-import { createBuildingsLayer } from './layers/buildings';
+import { createBuildingsLayer, createRoiBuildingsLayer } from './layers/buildings';
 import { animateCamera, CAMERA_PRESETS } from './camera/cinematicController';
 import { generateFullIsochroneGeoJSON } from './recon/isochroneGenerator';
 import { ReconPanel } from './recon/ReconPanel';
@@ -75,7 +75,8 @@ import {
   MousePointer2,
   Navigation,
   RotateCw,
-  Activity
+  Activity,
+  Percent
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -403,6 +404,241 @@ function DeckGLOverlay(props: MapboxOverlayProps) {
   return null;
 }
 
+const SatelliteOverlay = ({ viewState, time }: { viewState: any, time: Date }) => {
+  const [isReticleObscured, setIsReticleObscured] = useState(false);
+  const [hoveredPanel, setHoveredPanel] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      const centerX = window.innerWidth / 2;
+      const centerY = window.innerHeight / 2;
+      const dx = e.clientX - centerX;
+      const dy = e.clientY - centerY;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      // Proximity threshold: clear the center if mouse enters a 240px circle
+      const isNearCenter = distance < 240;
+      const isViewportSmall = window.innerWidth < 1024 || window.innerHeight < 720;
+      
+      setIsReticleObscured(isNearCenter || isViewportSmall);
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    
+    // Initial context check
+    const isViewportSmall = window.innerWidth < 1024 || window.innerHeight < 720;
+    if (isViewportSmall) {
+      setIsReticleObscured(true);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+    };
+  }, []);
+
+  const getPanelMotionProps = (panelId: string, shiftX: number, shiftY: number) => {
+    const isShifted = isReticleObscured && hoveredPanel !== panelId;
+    return {
+      animate: {
+        x: isShifted ? shiftX : 0,
+        y: isShifted ? shiftY : 0,
+        opacity: isShifted ? 0.18 : 1,
+        scale: isShifted ? 0.92 : 1,
+        filter: isShifted ? "blur(1px)" : "blur(0px)",
+      },
+      transition: {
+        type: "spring",
+        stiffness: 110,
+        damping: 16,
+        mass: 0.7
+      }
+    };
+  };
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-[100] overflow-hidden bg-black/15">
+      {/* Red Border Frame */}
+      <div className="absolute inset-4 border border-red-600/30 rounded-sm" />
+      <div className="absolute top-4 left-4 w-6 h-6 border-t-2 border-l-2 border-red-600" />
+      <div className="absolute top-4 right-4 w-6 h-6 border-t-2 border-r-2 border-red-600" />
+      <div className="absolute bottom-4 left-4 w-6 h-6 border-b-2 border-l-2 border-red-600" />
+      <div className="absolute bottom-4 right-4 w-6 h-6 border-b-2 border-r-2 border-red-600" />
+
+      {/* Top Left */}
+      <motion.div 
+        {...getPanelMotionProps("topLeft", -100, -40)}
+        onMouseEnter={() => setHoveredPanel("topLeft")}
+        onMouseLeave={() => setHoveredPanel(null)}
+        className="absolute top-8 left-8 flex flex-col gap-1 pointer-events-auto cursor-pointer"
+      >
+        <div className="flex items-center gap-2">
+          <motion.div 
+            animate={{ 
+              scale: [1, 1.4, 1],
+              opacity: [0.5, 1, 0.5],
+              boxShadow: [
+                "0 0 4px rgba(239, 68, 68, 0.5)",
+                "0 0 16px rgba(239, 68, 68, 0.9)",
+                "0 0 4px rgba(239, 68, 68, 0.5)"
+              ]
+            }}
+            transition={{ 
+              repeat: Infinity, 
+              duration: 1.0, 
+              ease: "easeInOut" 
+            }}
+            className="w-2.5 h-2.5 bg-red-600 rounded-full"
+          />
+          <motion.span 
+            animate={{ opacity: [1, 0.7, 1, 0.9, 1, 0.5, 1] }}
+            transition={{ repeat: Infinity, duration: 4, ease: "linear" }}
+            className="text-red-500 font-mono text-xs font-black tracking-widest drop-shadow-[0_1px_4px_rgba(0,0,0,0.8)]"
+          >
+            LIVE SAT FEED
+          </motion.span>
+        </div>
+        <span className="text-slate-200 font-mono text-[9px] font-bold tracking-[0.25em] drop-shadow-[0_1px_3px_rgba(0,0,0,0.9)]">ORBITAL TACTICAL OBSERVATION HUB</span>
+      </motion.div>
+
+      {/* Top Right */}
+      <motion.div 
+        {...getPanelMotionProps("topRight", 100, -40)}
+        onMouseEnter={() => setHoveredPanel("topRight")}
+        onMouseLeave={() => setHoveredPanel(null)}
+        className="absolute top-8 right-8 pointer-events-auto cursor-pointer"
+      >
+        <div className="border border-red-600/40 px-3 py-1 bg-black/90 backdrop-blur-md rounded shadow-[0_4px_12px_rgba(0,0,0,0.6)]">
+          <span className="text-red-400 font-mono text-[10px] font-black tracking-[0.3em]">SECURE_CON // OSIRIS-9</span>
+        </div>
+      </motion.div>
+
+      {/* Center Reticle */}
+      <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[320px] h-[320px] flex items-center justify-center">
+        {/* Expand-out Radar Sweeper Line/Ripple */}
+        <motion.div 
+          animate={{ scale: [0.5, 1.35], opacity: [0.75, 0] }}
+          transition={{ repeat: Infinity, duration: 2.2, ease: "easeOut" }}
+          className="absolute w-[220px] h-[220px] border border-red-600/30 rounded-full"
+        />
+
+        {/* Outer clockwise rotation circle */}
+        <motion.div 
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 8, ease: "linear" }}
+          className="absolute w-[210px] h-[210px] border border-dashed border-red-600/40 rounded-full"
+        />
+
+        {/* Inner Counter-clockwise rotation circle */}
+        <motion.div 
+          animate={{ rotate: -360 }}
+          transition={{ repeat: Infinity, duration: 12, ease: "linear" }}
+          className="absolute w-[150px] h-[150px] border border-dashed border-red-600/25 rounded-full"
+        />
+
+        {/* Static concentric control ring */}
+        <div className="absolute w-[110px] h-[110px] border border-red-650/15 rounded-full" />
+
+        {/* Center active terminal beacon */}
+        <motion.div 
+          animate={{ 
+            scale: [0.8, 1.35, 0.8],
+            boxShadow: [
+              "0 0 10px rgba(239, 68, 68, 0.6)",
+              "0 0 22px rgba(239, 68, 68, 1)",
+              "0 0 10px rgba(239, 68, 68, 0.6)"
+            ]
+          }}
+          transition={{ repeat: Infinity, duration: 0.8, ease: "easeInOut" }}
+          className="absolute w-2.5 h-2.5 bg-red-600 rounded-full"
+        />
+        
+        {/* Reticle Lines */}
+        <div className="absolute w-full h-px bg-gradient-to-r from-transparent via-red-600/40 to-transparent" />
+        <div className="absolute h-full w-px bg-gradient-to-b from-transparent via-red-600/40 to-transparent" />
+        
+        {/* Inner Brackets */}
+        <div className="absolute top-24 left-24 w-4 h-4 border-t border-l border-red-600/60" />
+        <div className="absolute top-24 right-24 w-4 h-4 border-t border-r border-red-600/60" />
+        <div className="absolute bottom-24 left-24 w-4 h-4 border-b border-l border-red-600/60" />
+        <div className="absolute bottom-24 right-24 w-4 h-4 border-b border-r border-red-600/60" />
+        
+        {/* Outer Brackets */}
+        <div className="absolute top-12 left-12 w-3 h-3 border-t-2 border-l-2 border-red-600" />
+        <div className="absolute top-12 right-12 w-3 h-3 border-t-2 border-r-2 border-red-600" />
+        <div className="absolute bottom-12 left-12 w-3 h-3 border-b-2 border-l-2 border-red-600" />
+        <div className="absolute bottom-12 right-12 w-3 h-3 border-b-2 border-r-2 border-red-600" />
+
+        {/* Line of Sight Cleared Flasher Alert */}
+        {isReticleObscured && (
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: [0.4, 0.9, 0.4], scale: 1 }}
+            transition={{ repeat: Infinity, duration: 2, ease: "easeInOut" }}
+            className="absolute -bottom-20 flex flex-col items-center whitespace-nowrap"
+          >
+            <span className="text-red-500 font-mono text-[9px] font-black tracking-[0.25em] bg-black/95 px-3 py-1 rounded border border-red-500/40 shadow-[0_0_15px_rgba(239,68,68,0.45)]">
+              SIGHT LINE SECURED // PANELS OFF-AXIS
+            </span>
+          </motion.div>
+        )}
+      </div>
+
+      {/* Bottom Left Status/Coordinates */}
+      <motion.div 
+        {...getPanelMotionProps("bottomLeft", -100, 40)}
+        onMouseEnter={() => setHoveredPanel("bottomLeft")}
+        onMouseLeave={() => setHoveredPanel(null)}
+        className="absolute bottom-8 left-8 flex flex-col gap-3 pointer-events-auto cursor-pointer"
+      >
+        <div className="bg-black/95 border border-red-600/40 p-3 rounded font-mono text-[11px] backdrop-blur-md text-white shadow-[0_4px_20px_rgba(0,0,0,0.85)] border-white/10">
+          <div className="flex gap-6">
+            <div>
+              <span className="text-red-400 text-[9px] font-black block mb-1 tracking-wider">LATITUDE</span>
+              <span className="font-bold font-mono text-xs text-white">{viewState.latitude.toFixed(6)}° N</span>
+            </div>
+            <div>
+              <span className="text-red-400 text-[9px] font-black block mb-1 tracking-wider">LONGITUDE</span>
+              <span className="font-bold font-mono text-xs text-white">{viewState.longitude.toFixed(6)}° E</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-3 animate-none">
+          <div className="bg-red-650 text-white px-2.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider flex items-center gap-1.5 shadow-[0_0_12px_rgba(239,68,68,0.6)] animate-pulse">
+            <span>🔴 SCAN ACTIVE</span>
+          </div>
+          <span className="text-slate-100 font-mono text-[9px] font-bold bg-black/90 border border-white/15 px-2 py-0.5 rounded uppercase tracking-wider shadow-[0_2px_8px_rgba(0,0,0,0.4)]">
+            ALT: {(10000 - viewState.zoom * 500).toFixed(0)}m FEET // PITCH {viewState.pitch.toFixed(0)}°
+          </span>
+        </div>
+      </motion.div>
+
+      {/* Bottom Right Clock/Telemetry */}
+      <motion.div 
+        {...getPanelMotionProps("bottomRight", 100, 40)}
+        onMouseEnter={() => setHoveredPanel("bottomRight")}
+        onMouseLeave={() => setHoveredPanel(null)}
+        className="absolute bottom-8 right-8 flex flex-col items-end gap-3 pointer-events-auto cursor-pointer"
+      >
+        <div className="bg-black/95 border border-red-600/30 p-3 rounded font-mono text-xs text-right backdrop-blur-md shadow-[0_4px_20px_rgba(0,0,0,0.85)] border-white/10">
+          <div className="flex items-center justify-end gap-3 mb-1.5">
+            <span className="text-slate-300 text-[9px] font-bold tracking-wider">UTC TIME</span>
+            <span className="text-red-500 font-black block text-sm tracking-widest">{time.getUTCHours().toString().padStart(2,'0')}:{time.getUTCMinutes().toString().padStart(2,'0')}:{time.getUTCSeconds().toString().padStart(2,'0')}</span>
+          </div>
+          <div className="flex items-center justify-end gap-3">
+            <span className="text-slate-300 text-[9px] font-bold tracking-wider">JULIAN DATE</span>
+            <span className="text-white font-bold text-[10px] tracking-wider">{time.getUTCFullYear()}-{(time.getUTCMonth()+1).toString().padStart(2,'0')}-{time.getUTCDate().toString().padStart(2,'0')}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 bg-black/95 px-3 py-1 rounded-full border border-red-600/40 shadow-[0_2px_8px_rgba(0,0,0,0.4)]">
+          <div className="w-2 h-2 bg-red-650 rounded-full animate-pulse shadow-[0_0_8px_#ef4444]" />
+          <span className="text-red-400 font-mono text-[9px] font-black tracking-widest uppercase">STABILIZED LINK</span>
+        </div>
+      </motion.div>
+    </div>
+  );
+};
+
+
 const TacticalHUD = () => {
   return (
     <div className="fixed inset-0 pointer-events-none z-[55] flex items-center justify-center overflow-hidden">
@@ -535,6 +771,7 @@ export default function App() {
   const [isTyping, setIsTyping] = useState(false);
   const [basemap, setBasemap] = useState('https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json');
   const [showBuildings, setShowBuildings] = useState(true);
+  const [showRoiHeatmap, setShowRoiHeatmap] = useState(false);
   const [layersMenuOpen, setLayersMenuOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -621,6 +858,14 @@ export default function App() {
   const [ pulse, setPulse ] = useState(0);
   const [investorCabinetOpen, setInvestorCabinetOpen] = useState(false);
   const [isUiTourOpen, setIsUiTourOpen] = useState(false);
+  const [satelliteMode, setSatelliteMode] = useState(false);
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
 
   // Sync state for entire interface styling (Tactical vs Civilian)
   useEffect(() => {
@@ -1146,6 +1391,10 @@ export default function App() {
         e.preventDefault();
         soundService.playClick();
         setIsReconPanelOpen(prev => !prev);
+      } else if (key === 'S') {
+        e.preventDefault();
+        soundService.playSonar();
+        setSatelliteMode(prev => !prev);
       } else if (key === 'O') {
         e.preventDefault();
         soundService.playSonar();
@@ -1426,17 +1675,30 @@ export default function App() {
 
   // Rule 1: "Quiet" Frontend - Layers
   const layers = useMemo(() => [
-    showBuildings && filteredBuildings ? createBuildingsLayer(
-      filteredBuildings,
-      (info) => setHoverInfo(info),
-      (info) => {
-        if (measurementMode === 'none') {
-          setSelectedBuilding(info);
-        }
-      },
-      pulse,
-      selectedBuilding?.id || null,
-      viewState.zoom
+    showBuildings && filteredBuildings ? (
+      showRoiHeatmap ? createRoiBuildingsLayer(
+        filteredBuildings,
+        (info) => setHoverInfo(info),
+        (info) => {
+          if (measurementMode === 'none') {
+            setSelectedBuilding(info);
+          }
+        },
+        pulse,
+        selectedBuilding?.id || null,
+        viewState.zoom
+      ) : createBuildingsLayer(
+        filteredBuildings,
+        (info) => setHoverInfo(info),
+        (info) => {
+          if (measurementMode === 'none') {
+            setSelectedBuilding(info);
+          }
+        },
+        pulse,
+        selectedBuilding?.id || null,
+        viewState.zoom
+      )
     ) : null,
 
     // Geospatial Drawing Layers
@@ -1723,7 +1985,7 @@ export default function App() {
 
     // OSINT Air Traffic Layers (Trips, points, texts)
     ...createAirTrafficLayer(flights, (info) => setHoverFlight(info), userRole, showAirTraffic)
-  ].filter(Boolean), [showBuildings, filteredBuildings, pulse, selectedBuilding, viewState.zoom, measurementMode, measurePoints, showParcels, showSoils, showWetlands, showInfrastructure, geospatialEditorActive, drawnVertices, viewState.latitude, viewState.longitude, showIsochrones, travelMode, getBuildingCenter, flights, showAirTraffic, userRole]);
+  ].filter(Boolean), [showBuildings, showRoiHeatmap, filteredBuildings, pulse, selectedBuilding, viewState.zoom, measurementMode, measurePoints, showParcels, showSoils, showWetlands, showInfrastructure, geospatialEditorActive, drawnVertices, viewState.latitude, viewState.longitude, showIsochrones, travelMode, getBuildingCenter, flights, showAirTraffic, userRole]);
 
   const handleBuyBuilding = async (id: number, cost: number, yieldAmount: number) => {
     if (balance >= cost && !portfolio.includes(id)) {
@@ -2207,7 +2469,7 @@ export default function App() {
       </div>
 
       {/* Rule 1: High Performance Map */}
-      <div className="relative w-full h-full z-0">
+      <div className={cn("relative w-full h-full z-0", satelliteMode && "satellite-map-filter")}>
         <Map
           ref={mapRef}
           {...viewState}
@@ -2237,7 +2499,7 @@ export default function App() {
             type="fill-extrusion"
             minzoom={13}
             paint={{
-              'fill-extrusion-color': [
+              'fill-extrusion-color': satelliteMode ? '#ffffff' : [
                 'interpolate',
                 ['linear'],
                 ['get', 'render_height'],
@@ -2246,7 +2508,7 @@ export default function App() {
               ],
               'fill-extrusion-height': ['get', 'render_height'],
               'fill-extrusion-base': ['get', 'render_min_height'],
-              'fill-extrusion-opacity': 0.8
+              'fill-extrusion-opacity': satelliteMode ? 0.95 : 0.8
             }}
           />
           <DeckGLOverlay layers={layers} />
@@ -2350,6 +2612,24 @@ export default function App() {
                 <span className="hidden xs:inline">Civilian Panel</span>
               </button>
             </div>
+
+            {/* Satellite Mode Toggle */}
+            <button 
+              onClick={() => {
+                setSatelliteMode(prev => !prev);
+                soundService.playSonar();
+              }}
+              className={cn(
+                "framer-glass h-8 px-3 rounded-full flex items-center gap-1.5 text-[9px] font-bold uppercase tracking-wider transition-all pointer-events-auto border",
+                satelliteMode 
+                  ? "bg-red-950/45 border-red-500 text-red-500 shadow-[0_0_15px_rgba(239,68,68,0.4)] font-black" 
+                  : "text-white/50 border-white/10 hover:text-white"
+              )}
+              title="Toggle Tactical Orbital Satellite Mode (S)"
+            >
+              <Radar className={cn("w-3.5 h-3.5", satelliteMode && "animate-spin text-red-500")} />
+              <span className="hidden xs:inline">{satelliteMode ? "SAT FEED ACTIVE" : "ORBITAL SAT"}</span>
+            </button>
 
             <button 
               onClick={() => setIsReconPanelOpen(!isReconPanelOpen)}
@@ -2683,6 +2963,32 @@ export default function App() {
                           {t.buildings}
                         </div>
                         {showBuildings ? <Eye className="w-3 h-3" /> : <EyeOff className="w-3 h-3" />}
+                      </button>
+                      
+                      <button
+                        onClick={() => {
+                          const next = !showRoiHeatmap;
+                          setShowRoiHeatmap(next);
+                          if (next) {
+                            setShowBuildings(true);
+                          }
+                          soundService.playSonar();
+                        }}
+                        className={cn(
+                          "w-full flex items-center justify-between px-3 py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider transition-all border border-transparent",
+                          showRoiHeatmap 
+                            ? "bg-emerald-950/30 border-emerald-500/30 text-emerald-400 shadow-[0_0_10px_rgba(16,185,129,0.15)]" 
+                            : "text-slate-400 hover:bg-white/5"
+                        )}
+                        title="Identify high-value investment targets color-coded by ROI level"
+                      >
+                        <div className="flex items-center gap-3">
+                          <Percent className="w-3.5 h-3.5 text-emerald-400" />
+                          {language === 'en' ? "ROI Analytics Mode" : "Расцветка Ликвидности (ROI)"}
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {showRoiHeatmap ? <span className="text-[8px] uppercase tracking-widest font-black text-emerald-400 bg-emerald-500/10 px-1 py-0.5 rounded leading-none border border-emerald-500/20 shadow-[0_0_8px_rgba(16,185,129,0.3)]">ON</span> : <span className="text-[8px] uppercase tracking-widest font-bold text-slate-500">OFF</span>}
+                        </div>
                       </button>
                       <button
                         onClick={() => setShowParcels(!showParcels)}
@@ -3018,6 +3324,63 @@ export default function App() {
                     {checkPermission(userRole, 'canTrade') ? t.buyAsset : '🔒 Demo Only'}
                   </button>
                 )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ROI Target Legend */}
+        <AnimatePresence>
+          {showRoiHeatmap && (
+            <motion.div
+              initial={{ x: -25, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: -25, opacity: 0 }}
+              className="absolute bottom-4 sm:bottom-6 left-4 sm:left-6 z-50 pointer-events-auto max-w-[280px] sm:max-w-[320px] bg-black/95 border border-emerald-500/30 rounded-xl p-3.5 shadow-[0_4px_30px_rgba(0,0,0,0.85)] border-white/10 flex flex-col gap-2.5 backdrop-blur-md"
+            >
+              <div className="flex items-center gap-2 pb-1.5 border-b border-white/10">
+                <div className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_8px_#10b981]" />
+                <span className="text-[10px] sm:text-[11px] uppercase font-black text-emerald-400 font-mono tracking-widest leading-none">
+                  ROI Target Identifier
+                </span>
+              </div>
+              <div className="flex flex-col gap-2 font-mono">
+                <div className="flex items-start gap-3">
+                  <div className="w-3.5 h-3.5 rounded mt-0.5 border border-emerald-500/50 flex-shrink-0 flex items-center justify-center bg-emerald-500/30">
+                    <div className="w-1.5 h-1.5 bg-emerald-400 rounded-sm animate-pulse" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-[9px] uppercase font-bold text-emerald-400 leading-none">High-Value Target</p>
+                      <span className="text-[8px] px-1 py-0.2 bg-emerald-500/20 text-emerald-300 rounded border border-emerald-500/30">{">15%"}</span>
+                    </div>
+                    <p className="text-[8px] text-slate-400 mt-0.5 leading-normal">Optimized assets. Recommended candidate for immediate acquisition.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-3.5 h-3.5 rounded mt-0.5 border border-amber-500/50 flex-shrink-0 flex items-center justify-center bg-amber-500/30">
+                    <div className="w-1.5 h-1.5 bg-amber-400 rounded-sm" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-[9px] uppercase font-bold text-amber-400 leading-none">Standard Yield</p>
+                      <span className="text-[8px] px-1 py-0.2 bg-amber-500/20 text-amber-300 rounded border border-amber-500/30">5-15%</span>
+                    </div>
+                    <p className="text-[8px] text-slate-400 mt-0.5 leading-normal">Nominal operation profile. Balanced cash flows and risk index.</p>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3">
+                  <div className="w-3.5 h-3.5 rounded mt-0.5 border border-red-500/50 flex-shrink-0 flex items-center justify-center bg-red-500/30">
+                    <div className="w-1.5 h-1.5 bg-red-400 rounded-sm" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-1.5">
+                      <p className="text-[9px] uppercase font-bold text-red-400 leading-none">Sub-Optimal Return</p>
+                      <span className="text-[8px] px-1 py-0.2 bg-red-500/20 text-red-300 rounded border border-red-500/30">{"<5%"}</span>
+                    </div>
+                    <p className="text-[8px] text-slate-400 mt-0.5 leading-normal">Underperforming assets. Restructuring or tactical disposal indicated.</p>
+                  </div>
+                </div>
               </div>
             </motion.div>
           )}
@@ -3968,6 +4331,8 @@ export default function App() {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {satelliteMode && <SatelliteOverlay viewState={viewState} time={currentTime} />}
 
       {/* UI Tour Walkthrough Onboarding (YardSoft Aegis) */}
       <UITourWalkthrough
